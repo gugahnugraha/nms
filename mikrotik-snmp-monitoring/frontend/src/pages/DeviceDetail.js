@@ -355,6 +355,21 @@ const DeviceDetail = () => {
     }
   }, [selectedInterface]);
 
+  // Refresh device detail data (metrics, logs, collector status, interfaces)
+  const handleRefresh = async () => {
+    setLoading(true);
+    await fetchDeviceData();
+    await fetchMetrics();
+    await fetchCollectorStatus();
+    await fetchInterfaceMetrics();
+    setLoading(false);
+  };
+
+  // Get detailed metrics (real-time)
+  const handleGetDetailedMetrics = async () => {
+    await fetchRealTimeMetrics();
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-96">
@@ -1215,6 +1230,16 @@ const DeviceDetail = () => {
                             </td>
                             <td className="py-2 px-3 text-sm text-right">
                               {iface.ifInOctets 
+                                ? `${(iface.ifInOctets / 1024).toFixed(2)} KB` 
+                                : 'N/A'}
+                            </td>
+                            <td className="py-2 px-3 text-sm text-right">
+                              {iface.ifOutOctets 
+                                ? `${(iface.ifOutOctets / 1024).toFixed(2)} KB` 
+                                : 'N/A'}
+                            </td>
+                            <td className="py-2 px-3 text-sm text-right">
+                              {iface.ifInErrors || iface.ifOutErrors 
                                 ? `${iface.ifInErrors || 0} / ${iface.ifOutErrors || 0}` 
                                 : '0 / 0'}
                             </td>

@@ -475,39 +475,20 @@ const collectMetrics = async (device, metricGroups = Object.keys(METRICS)) => {
           if (groupName === 'system') {
             result.summary.uptime = metrics.sysUpTime;
           } else if (groupName === 'resources') {
-            // Debug log
-            console.log('[SNMP DEBUG] resources metrics:', metrics);
-            // CPU Usage
-            result.summary.cpuUsage = (metrics.cpuUsage !== undefined && metrics.cpuUsage !== null)
-              ? parseInt(metrics.cpuUsage)
-              : 0;
-
-            // Memory Usage
-            let memoryUsage = 0;
-            if ('memorySize' in metrics && metrics.memorySize > 0) {
-              // Coba dapatkan dari storage jika tersedia
-              if (result.metrics.storage && result.metrics.storage.length > 0) {
-                const memStorage = result.metrics.storage.find(s =>
-                  (s.description || s.storageDescr || '').toLowerCase().includes('memory')
-                );
-                if (memStorage && (memStorage.storageUsagePercent !== undefined || memStorage.usedPercent !== undefined)) {
-                  memoryUsage = Math.round(memStorage.storageUsagePercent || memStorage.usedPercent);
-                  console.log('[SNMP DEBUG] memoryUsage from storage:', memoryUsage);
-                }
-              }
-              // Fallback: jika storage "memory" tidak ditemukan, gunakan OID scalar jika tersedia
-              if (memoryUsage === 0) {
-                // Coba cari OID memoryUsed dari metrics (jika ada)
-                if (metrics.memoryUsed !== undefined && metrics.memorySize !== undefined) {
-                  memoryUsage = Math.round((metrics.memoryUsed / metrics.memorySize) * 100);
-                  console.log('[SNMP DEBUG] memoryUsage from OID fallback:', memoryUsage);
-                } else {
-                  console.log('[SNMP DEBUG] memoryUsage fallback: tidak ditemukan storage memory dan OID memoryUsed');
+            result.summary.cpuUsage = metrics.cpuUsage;
+            
+            // Calculate memory usage
+            if ('memorySize' in metrics) {
+              const memorySize = metrics.memorySize;
+              // Get memory used from storage table if available
+              if (result.metrics.storage) {
+                const memStorage = result.metrics.storage.find(s => 
+                  s.description && s.description.toLowerCase().includes('memory'));
+                if (memStorage) {
+                  result.summary.memoryUsage = memStorage.storageUsagePercent;
                 }
               }
             }
-            result.summary.memoryUsage = memoryUsage;
-            console.log('[SNMP DEBUG] summary.cpuUsage:', result.summary.cpuUsage, 'summary.memoryUsage:', result.summary.memoryUsage);
           } else if (groupName === 'temperature') {
             result.summary.temperature = metrics.boardTemperature || metrics.cpuTemperature;
           }
@@ -529,7 +510,6 @@ const collectMetrics = async (device, metricGroups = Object.keys(METRICS)) => {
       result.summary.status = 'degraded';
     }
     
-    console.log('[SNMP DEBUG] Final metrics result:', JSON.stringify(result, null, 2));
     return result;
   } catch (error) {
     // Make sure to close the session
@@ -1055,58 +1035,42 @@ class SnmpCollector extends EventEmitter {
    */
   async _collect() {
     if (!this.isRunning) return null;
-
+    
     this.stats.totalCollections++;
     this.stats.lastCollectionTime = new Date();
-
+    
     try {
       const metrics = await collectMetrics(this.device);
       this.lastMetrics = metrics;
       this.stats.successfulCollections++;
       this.stats.lastSuccessTime = new Date();
       this.consecutiveErrors = 0;
-
-      // Defensive: ensure metrics is always an object with summary
-      let safeMetrics = metrics;
-      if (!safeMetrics || typeof safeMetrics !== 'object') {
-        safeMetrics = { summary: { status: 'error', errors: ['No metrics collected'] }, metrics: {} };
-      } else if (!safeMetrics.summary) {
-        safeMetrics.summary = { status: 'error', errors: ['No summary in metrics'] };
-      }
-
+      
       this.emit('metrics', {
         deviceId: this.device._id,
         deviceName: this.device.name,
         timestamp: new Date(),
-        metrics: safeMetrics
+        metrics
       });
-
-      return safeMetrics;
+      
+      return metrics;
     } catch (error) {
       this.stats.failedCollections++;
       this.stats.lastError = error.message;
       this.consecutiveErrors++;
-
-      // Defensive: emit a metrics event with error summary for downstream destructuring safety
-      this.emit('metrics', {
-        deviceId: this.device._id,
-        deviceName: this.device.name,
-        timestamp: new Date(),
-        metrics: { summary: { status: 'error', errors: [error.message] }, metrics: {} }
-      });
-
+      
       this.emit('error', {
         deviceId: this.device._id,
         deviceName: this.device.name,
         error: error.message,
         timestamp: new Date()
       });
-
+      
       // Auto-stop after too many consecutive errors
       if (this.consecutiveErrors >= this.maxErrors) {
         console.error(`Too many errors (${this.consecutiveErrors}) for ${this.device.name}, stopping collector`);
         this.stop();
-
+        
         this.emit('auto-stop', {
           deviceId: this.device._id,
           deviceName: this.device.name,
@@ -1114,8 +1078,8 @@ class SnmpCollector extends EventEmitter {
           lastError: error.message
         });
       }
-
-      return { summary: { status: 'error', errors: [error.message] }, metrics: {} };
+      
+      return null;
     }
   }
 }
