@@ -272,7 +272,7 @@ const Devices = () => {
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => setViewMode('grid')}
-                className={`p-2 rounded-lg ${viewMode === 'grid' ? 'bg-primary-100 text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
+                className={`btn btn-xs ${viewMode === 'grid' ? 'btn-primary' : 'btn-outline'}`}
               >
                 <div className="w-5 h-5 grid grid-cols-2 gap-1">
                   <div className="bg-current rounded-sm"></div>
@@ -283,7 +283,7 @@ const Devices = () => {
               </button>
               <button
                 onClick={() => setViewMode('list')}
-                className={`p-2 rounded-lg ${viewMode === 'list' ? 'bg-primary-100 text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
+                className={`btn btn-xs ${viewMode === 'list' ? 'btn-primary' : 'btn-outline'}`}
               >
                 <div className="w-5 h-5 flex flex-col space-y-1">
                   <div className="bg-current h-1 rounded-sm"></div>
@@ -388,7 +388,7 @@ const Devices = () => {
               <h3 className="text-lg font-medium">Ping Result</h3>
               <button 
                 onClick={() => setShowPingResultModal(false)}
-                className="text-gray-400 hover:text-gray-600"
+                className="btn btn-xs btn-outline"
               >
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

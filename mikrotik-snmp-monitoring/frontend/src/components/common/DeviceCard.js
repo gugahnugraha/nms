@@ -39,7 +39,7 @@ const DeviceCard = ({ device, onAction, showActions = true }) => {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-100 hover:shadow-md transition-shadow duration-200 overflow-hidden">
+    <div className="card hover:shadow-md transition-shadow duration-200">
       <div className="p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start space-x-3">
@@ -48,7 +48,7 @@ const DeviceCard = ({ device, onAction, showActions = true }) => {
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1 mb-0.5">
-                <span className="inline-block bg-gray-200 text-gray-800 px-1.5 py-0.5 rounded text-xs">
+                <span className="badge badge-primary">
                   {device.deviceId || 'N/A'}
                 </span>
                 <h3 className="text-sm font-medium text-gray-900 truncate">{device.name}</h3>
@@ -83,14 +83,12 @@ const DeviceCard = ({ device, onAction, showActions = true }) => {
               <span>{formatUptime(device.uptime)}</span>
             </div>
           )}
-        </div>
-        
-        {device.tags && device.tags.length > 0 && (
+        </div>            {device.tags && device.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2">
             {device.tags.map((tag, index) => (
               <span
                 key={index}
-                className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700"
+                className="badge badge-info"
               >
                 {tag}
               </span>
@@ -103,7 +101,7 @@ const DeviceCard = ({ device, onAction, showActions = true }) => {
         <div className="flex flex-wrap justify-between items-center gap-2">
           <Link
             to={`/devices/${device._id}`}
-            className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium rounded bg-primary-500 text-white hover:bg-primary-600 transition-colors"
+            className="btn btn-primary btn-xs"
             title="View device details"
           >
             <ExternalLink className="w-3 h-3 mr-1.5" />
@@ -114,7 +112,7 @@ const DeviceCard = ({ device, onAction, showActions = true }) => {
             <div className="flex flex-wrap gap-1.5">
               <button
                 onClick={() => onAction && onAction('ping', device)}
-                className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium rounded bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+                className="btn btn-secondary btn-xs"
                 title="Ping device"
               >
                 <Signal className="w-3 h-3" />
@@ -123,7 +121,7 @@ const DeviceCard = ({ device, onAction, showActions = true }) => {
               
               <button
                 onClick={() => onAction && onAction('edit', device)}
-                className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium rounded bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+                className="btn btn-outline btn-xs"
                 title="Edit device"
               >
                 <Edit className="w-3 h-3" />
@@ -131,7 +129,7 @@ const DeviceCard = ({ device, onAction, showActions = true }) => {
               
               <button
                 onClick={() => onAction && onAction('delete', device)}
-                className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium rounded bg-red-500 text-white hover:bg-red-600 transition-colors"
+                className="btn btn-danger btn-xs"
                 title="Delete device"
               >
                 <Trash2 className="w-3 h-3" />

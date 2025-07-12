@@ -72,14 +72,14 @@ const Sidebar = ({ isOpen, toggleSidebar, currentPath }) => {
       `}>
         <div className="flex items-center justify-between h-16 px-6 border-b border-gray-200">
           <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-primary-500 rounded-lg flex items-center justify-center">
+            <div className="w-8 h-8 bg-primary-500 rounded-lg flex items-center justify-center shadow-sm">
               <Activity className="w-5 h-5 text-white" />
             </div>
             <span className="text-xl font-bold text-gray-900">NMS</span>
           </div>
           <button
             onClick={toggleSidebar}
-            className="lg:hidden p-1 rounded-md text-gray-400 hover:text-gray-500"
+            className="lg:hidden p-1 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100"
           >
             <X className="w-6 h-6" />
           </button>
@@ -95,10 +95,11 @@ const Sidebar = ({ isOpen, toggleSidebar, currentPath }) => {
                 <a
                   key={item.name}
                   href={item.path}
-                  className={`
-                    sidebar-nav-item
-                    ${isActive ? 'active' : ''}
-                  `}
+                  className={`flex items-center px-3 py-2.5 text-sm font-medium rounded-md mb-1 ${
+                    isActive 
+                      ? 'bg-primary-100 text-primary-600' 
+                      : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                  }`}
                 >
                   <Icon className="w-5 h-5 mr-3" />
                   {item.name}
@@ -109,13 +110,13 @@ const Sidebar = ({ isOpen, toggleSidebar, currentPath }) => {
         </nav>
 
         {/* User info and logout */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200 bg-gray-50">
           <div className="flex items-center space-x-3 mb-3">
-            <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
+            <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center shadow-sm">
               <User className="w-6 h-6 text-primary-600" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900 truncate">
+              <p className="text-sm font-semibold text-gray-900 truncate">
                 {user?.firstName} {user?.lastName}
               </p>
               <p className="text-xs text-gray-500 truncate">
@@ -125,7 +126,7 @@ const Sidebar = ({ isOpen, toggleSidebar, currentPath }) => {
           </div>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center px-3 py-2 text-sm font-medium text-gray-700 rounded-md hover:bg-gray-100 hover:text-gray-900 transition-colors duration-200"
+            className="w-full flex items-center px-3 py-2.5 text-sm font-medium rounded-md text-gray-700 hover:bg-gray-100 hover:text-gray-900 transition-colors"
           >
             <LogOut className="w-4 h-4 mr-3" />
             Logout

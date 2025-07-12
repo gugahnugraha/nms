@@ -7,17 +7,17 @@ const StatusBadge = ({ status, size = 'default', showIcon = true }) => {
     online: {
       label: 'Online',
       icon: Wifi,
-      className: 'bg-green-100 text-green-800'
+      className: 'badge-success'
     },
     offline: {
       label: 'Offline',
       icon: WifiOff,
-      className: 'bg-red-100 text-red-800'
+      className: 'badge-danger'
     },
     unknown: {
       label: 'Unknown',
       icon: AlertCircle,
-      className: 'bg-gray-100 text-gray-800'
+      className: 'badge-info'
     }
   };
 
@@ -32,7 +32,7 @@ const StatusBadge = ({ status, size = 'default', showIcon = true }) => {
 
   return (
     <span className={clsx(
-      'inline-flex items-center rounded-full font-medium',
+      'badge',
       config.className,
       sizeClasses[size]
     )}>
