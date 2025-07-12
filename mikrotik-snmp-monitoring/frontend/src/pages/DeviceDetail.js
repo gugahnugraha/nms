@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useState, useEffect } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { toast } from 'react-toastify';
+import { toast } from 'react-hot-toast';
 import { 
   Edit2, Trash2, ArrowLeft, Activity, Clock, MapPin, 
   Settings, RefreshCw, AlertCircle, TrendingUp, Network,

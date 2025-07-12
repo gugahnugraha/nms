@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { toast } from 'react-hot-toast';
 import useMonitoring from '../hooks/useMonitoring';
 
@@ -7,62 +7,52 @@ const NotificationContext = createContext();
 
 // Create a provider component
 export const NotificationProvider = ({ children }) => {
+  const deviceStatesRef = useRef({});
   const [deviceStates, setDeviceStates] = useState({});
-  const [initialized, setInitialized] = useState(false);
   const { dashboardData } = useMonitoring(true, 15000); // Poll every 15 seconds
 
-  // Track device state changes
+  // Use a single effect to track device states and show notifications
   useEffect(() => {
-    if (!dashboardData?.devices) return;
+    if (!dashboardData?.devices || dashboardData.devices.length === 0) return;
 
-    // First time initialization
-    if (!initialized && dashboardData.devices.length > 0) {
-      const initialStates = {};
-      dashboardData.devices.forEach(device => {
-        initialStates[device._id] = device.status;
-      });
-      setDeviceStates(initialStates);
-      setInitialized(true);
-      return;
-    }
-
-    // Check for state changes after initialization
-    if (initialized) {
-      dashboardData.devices.forEach(device => {
-        const prevStatus = deviceStates[device._id];
-        
-        // If this is a new device or status has changed
-        if (prevStatus && prevStatus !== device.status) {
-          // Status changed, show toast notification
-          if (device.status === 'offline') {
-            toast.error(
-              `🚨 Device ${device.name} is now offline!`, 
-              { 
-                duration: 5000,
-                icon: '🚨',
-                id: `device-down-${device._id}`
-              }
-            );
-          } else if (device.status === 'online' && prevStatus === 'offline') {
-            toast.success(
-              `✅ Device ${device.name} is back online!`,
-              { 
-                duration: 5000,
-                icon: '✅',
-                id: `device-up-${device._id}`
-              }
-            );
-          }
+    const newStates = {};
+    dashboardData.devices.forEach(device => {
+      // Get the previous status from the ref to avoid dependency issues
+      const prevStatus = deviceStatesRef.current[device._id];
+      
+      // If we have a previous status and it's different, show notification
+      if (prevStatus && prevStatus !== device.status) {
+        // Show toast notification for status change
+        if (device.status === 'offline') {
+          toast.error(
+            `🚨 Device ${device.name} is now offline!`, 
+            { 
+              duration: 5000,
+              icon: '🚨',
+              id: `device-down-${device._id}`
+            }
+          );
+        } else if (device.status === 'online' && prevStatus === 'offline') {
+          toast.success(
+            `✅ Device ${device.name} is back online!`,
+            { 
+              duration: 5000,
+              icon: '✅',
+              id: `device-up-${device._id}`
+            }
+          );
         }
-        
-        // Update the state
-        setDeviceStates(prev => ({
-          ...prev,
-          [device._id]: device.status
-        }));
-      });
-    }
-  }, [dashboardData, initialized, deviceStates]);
+      }
+      
+      // Store current status in new state object
+      newStates[device._id] = device.status;
+    });
+    
+    // Update ref for next comparison
+    deviceStatesRef.current = newStates;
+    // Update state for context consumers
+    setDeviceStates(newStates);
+  }, [dashboardData]);
 
   // Count current alerts (offline devices)
   const getAlertCount = () => {

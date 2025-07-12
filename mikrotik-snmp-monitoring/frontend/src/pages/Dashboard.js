@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { 
   Activity, 
   Server, 
@@ -23,7 +24,9 @@ import {
 import { useAuth } from '../context/AuthContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import StatusBadge from '../components/common/StatusBadge';
+import DeviceAlerts from '../components/common/DeviceAlerts';
 import useMonitoring from '../hooks/useMonitoring';
+import snmpExporterService from '../services/snmpExporterService';
 import { 
   LineChart, 
   Line, 
@@ -42,12 +45,34 @@ import {
 
 const Dashboard = () => {
   const { user } = useAuth();
-  const { dashboardData, loading, error, lastUpdated, refetch } = useMonitoring(true, 30000);
+  const { dashboardData, loading, error, lastUpdated, refetch, realTimeData } = useMonitoring(true, 30000);
   const [refreshing, setRefreshing] = useState(false);
   const [timeRange, setTimeRange] = useState('24h');
   const [selectedMetric, setSelectedMetric] = useState('response');
   const [showUptimeModal, setShowUptimeModal] = useState(false);
   const [showPerformanceModal, setShowPerformanceModal] = useState(false);
+  const [activeCollectors, setActiveCollectors] = useState([]);
+
+  // Get list of active SNMP collectors
+  useEffect(() => {
+    const fetchActiveCollectors = async () => {
+      try {
+        const response = await snmpExporterService.getActiveCollectors();
+        if (response.success) {
+          setActiveCollectors(response.data.collectors || []);
+        }
+      } catch (error) {
+        console.error('Failed to fetch active collectors:', error);
+      }
+    };
+    
+    fetchActiveCollectors();
+    
+    // Refresh active collectors list every minute
+    const interval = setInterval(fetchActiveCollectors, 60000);
+    
+    return () => clearInterval(interval);
+  }, []);
 
   const timeRangeOptions = [
     { value: '1h', label: 'Last Hour' },
@@ -61,12 +86,10 @@ const Dashboard = () => {
     setRefreshing(true);
     try {
       await refetch();
-      // If you have toast notifications in your project
-      // toast.success('Dashboard data refreshed successfully');
+      toast.success('Dashboard data refreshed successfully');
     } catch (error) {
       console.error('Error refreshing data:', error);
-      // If you have toast notifications in your project
-      // toast.error('Failed to refresh dashboard data');
+      toast.error('Failed to refresh dashboard data');
     } finally {
       setRefreshing(false);
     }
@@ -182,14 +205,16 @@ const Dashboard = () => {
     );
   }
 
+  // These should only appear once in the file
   const stats = dashboardData?.statusCounts || { online: 0, offline: 0, unknown: 0 };
   const totalDevices = dashboardData?.totalDevices || 0;
   const devices = dashboardData?.devices || [];
   const recentLogs = dashboardData?.recentLogs || [];
-  
-  // Mock data for charts
+
+  // Generate chart data
   const networkStatusData = generateMockChartData();
   const devicePerformanceData = generateDevicePerformanceData();
+  
   // Add calculated downtime for each device
   devicePerformanceData.forEach(device => {
     device.downtime = 100 - device.uptime;
@@ -232,6 +257,9 @@ const Dashboard = () => {
           </button>
         </div>
       </div>
+
+      {/* Device Alerts - Show prominent alert for offline devices */}
+      <DeviceAlerts devices={devices} />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
