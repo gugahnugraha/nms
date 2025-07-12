@@ -1,9 +1,11 @@
 import React from 'react';
 import { Menu, Bell, Search, User } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useNotification } from '../../context/NotificationContext';
 
 const Navbar = ({ toggleSidebar }) => {
   const { user } = useAuth();
+  const { alertCount } = useNotification();
 
   return (
     <header className="bg-white shadow-sm border-b border-gray-200 h-16 sticky top-0 z-10">
@@ -34,7 +36,11 @@ const Navbar = ({ toggleSidebar }) => {
           {/* Notifications */}
           <button className="p-2 text-gray-500 hover:text-primary-600 hover:bg-gray-100 rounded-md relative transition-colors">
             <Bell className="w-6 h-6" />
-            <span className="absolute top-1.5 right-1.5 block h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white"></span>
+            {alertCount > 0 && (
+              <span className="absolute top-1 right-1 flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-xs font-bold ring-2 ring-white">
+                {alertCount > 9 ? '9+' : alertCount}
+              </span>
+            )}
           </button>
 
           {/* User menu */}

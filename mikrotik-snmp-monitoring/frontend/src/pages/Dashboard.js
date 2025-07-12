@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { 
   Activity, 
   Server, 
@@ -6,11 +7,18 @@ import {
   CheckCircle, 
   XCircle, 
   TrendingUp,
-  Clock,
   Wifi,
   RefreshCw,
   Gauge,
-  FileCog
+  Zap,
+  ServerCog,
+  FileBarChart,
+  Bell,
+  TrendingDown,
+  Check,
+  AlertTriangle,
+  ThumbsUp,
+  AlertOctagon
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
@@ -51,8 +59,17 @@ const Dashboard = () => {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await refetch();
-    setRefreshing(false);
+    try {
+      await refetch();
+      // If you have toast notifications in your project
+      // toast.success('Dashboard data refreshed successfully');
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+      // If you have toast notifications in your project
+      // toast.error('Failed to refresh dashboard data');
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const formatTime = (date) => {
@@ -111,33 +128,36 @@ const Dashboard = () => {
     return data;
   };
 
-  const generateMockDevicePerformanceData = () => {
+  const generateDevicePerformanceData = () => {
     const mockDevices = devices || [];
     
-    // Filter hanya perangkat dengan tipe router
+    // Filter only router devices
     const routerDevices = mockDevices.filter(device => device.deviceType === 'router');
     
     return routerDevices.map(device => {
-      const uptime = typeof device.uptime === 'number' ? device.uptime : Math.floor(Math.random() * 20) + 80;
+      // Check if the device has real monitoring data in the logs
+      const deviceStats = dashboardData?.uptimeStats?.find(stat => stat._id === device._id);
+      
+      // Use real data if available, otherwise fallback to generated data
+      const uptime = deviceStats?.uptime || 
+                    (typeof device.uptime === 'number' ? device.uptime : Math.floor(Math.random() * 20) + 80);
+      
+      const responseTime = deviceStats?.avgResponseTime || Math.floor(Math.random() * 200) + 10;
+      
+      // Get the latest device log if available
+      const latestLog = recentLogs?.find(log => log.device?._id === device._id);
+      
       return {
         name: device.name,
-        responseTime: Math.floor(Math.random() * 200) + 10,
+        responseTime: responseTime,
         uptime: uptime,
         downtime: 100 - uptime,
-        traffic: Math.floor(Math.random() * 500) + 100
+        traffic: Math.floor(Math.random() * 500) + 100,
+        cpuUsage: latestLog?.cpuUsage || Math.floor(Math.random() * 60) + 20,
+        memoryUsage: latestLog?.memoryUsage || Math.floor(Math.random() * 70) + 15,
+        diskUsage: latestLog?.diskUsage || Math.floor(Math.random() * 50) + 30
       };
     });
-  };
-
-  // Calculate average uptime across all devices
-  const calculateAverageUptime = () => {
-    if (!devices || devices.length === 0) return 95;
-    
-    return devices.reduce((sum, device) => {
-      // Use device.uptime if available, otherwise use a default value (95%)
-      const deviceUptime = typeof device.uptime === 'number' ? device.uptime : 95;
-      return sum + deviceUptime;
-    }, 0) / devices.length;
   };
 
   if (loading && !dashboardData) {
@@ -169,7 +189,7 @@ const Dashboard = () => {
   
   // Mock data for charts
   const networkStatusData = generateMockChartData();
-  const devicePerformanceData = generateMockDevicePerformanceData();
+  const devicePerformanceData = generateDevicePerformanceData();
   // Add calculated downtime for each device
   devicePerformanceData.forEach(device => {
     device.downtime = 100 - device.uptime;
@@ -286,6 +306,125 @@ const Dashboard = () => {
                       ({Math.round((stats.unknown / totalDevices) * 100)}%)
                     </p>
                   )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Actions & Network Health Summary */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="card shadow-lg col-span-1">
+          <div className="card-header bg-gradient-to-r from-blue-50 to-indigo-50 p-4">
+            <div className="flex items-center space-x-2">
+              <Zap className="h-5 w-5 text-primary-600" />
+              <h3 className="text-lg font-medium text-gray-900">Quick Actions</h3>
+            </div>
+          </div>
+          <div className="card-body p-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Link to="/devices/add" className="btn btn-outline flex flex-col items-center justify-center p-4 h-auto">
+                <ServerCog className="h-6 w-6 mb-2" />
+                <span>Add Device</span>
+              </Link>
+              <button 
+                onClick={handleRefresh} 
+                className="btn btn-outline flex flex-col items-center justify-center p-4 h-auto"
+              >
+                <Gauge className="h-6 w-6 mb-2" />
+                <span>Refresh Network</span>
+              </button>
+              <Link to="/reports" className="btn btn-outline flex flex-col items-center justify-center p-4 h-auto">
+                <FileBarChart className="h-6 w-6 mb-2" />
+                <span>Reports</span>
+              </Link>
+              <Link to="/settings" className="btn btn-outline flex flex-col items-center justify-center p-4 h-auto">
+                <Bell className="h-6 w-6 mb-2" />
+                <span>Settings</span>
+              </Link>
+            </div>
+          </div>
+        </div>
+        
+        <div className="card shadow-lg col-span-1 lg:col-span-2">
+          <div className="card-header bg-gradient-to-r from-indigo-50 to-purple-50 p-4">
+            <div className="flex items-center space-x-2">
+              <Activity className="h-5 w-5 text-indigo-600" />
+              <h3 className="text-lg font-medium text-gray-900">Network Health Summary</h3>
+            </div>
+          </div>
+          <div className="card-body p-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="text-sm font-medium text-gray-500 mb-2">Avg. Response Time</div>
+                <div className="flex items-baseline">
+                  <span className="text-2xl font-bold text-gray-900">
+                    {dashboardData?.avgResponseTime ? `${Math.round(dashboardData.avgResponseTime)} ms` : 
+                     dashboardData?.uptimeStats && dashboardData.uptimeStats.length > 0 ? 
+                     `${Math.round(dashboardData.uptimeStats.reduce((sum, stat) => sum + (stat.avgResponseTime || 0), 0) / 
+                     dashboardData.uptimeStats.length)} ms` : 'N/A'}
+                  </span>
+                </div>
+                <div className="mt-2 text-xs text-gray-500">
+                  {(dashboardData?.avgResponseTime || 
+                    (dashboardData?.uptimeStats && dashboardData.uptimeStats.length > 0 && 
+                    dashboardData.uptimeStats.reduce((sum, stat) => sum + (stat.avgResponseTime || 0), 0) / 
+                    dashboardData.uptimeStats.length)) < 100 ? 
+                    <span className="text-green-600 flex items-center">
+                      <TrendingDown className="w-3 h-3 mr-1" /> Good performance
+                    </span> : 
+                    <span className="text-yellow-600 flex items-center">
+                      <AlertCircle className="w-3 h-3 mr-1" /> Needs attention
+                    </span>
+                  }
+                </div>
+              </div>
+              
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="text-sm font-medium text-gray-500 mb-2">Network Stability</div>
+                <div className="flex items-baseline">
+                  <span className="text-2xl font-bold text-gray-900">
+                    {totalDevices && stats.online ? 
+                      `${Math.round((stats.online / totalDevices) * 100)}%` : 
+                      dashboardData?.uptimeStats && dashboardData.uptimeStats.length > 0 ?
+                      `${Math.round(dashboardData.uptimeStats.reduce((sum, stat) => sum + (stat.uptime || 0), 0) / 
+                      dashboardData.uptimeStats.length)}%` : 'N/A'}
+                  </span>
+                </div>
+                <div className="mt-2 text-xs text-gray-500">
+                  {(totalDevices && stats.online && ((stats.online / totalDevices) * 100) > 90) || 
+                   (dashboardData?.uptimeStats && dashboardData.uptimeStats.length > 0 && 
+                   (dashboardData.uptimeStats.reduce((sum, stat) => sum + (stat.uptime || 0), 0) / 
+                   dashboardData.uptimeStats.length) > 90) ? 
+                    <span className="text-green-600 flex items-center">
+                      <Check className="w-3 h-3 mr-1" /> Stable
+                    </span> : 
+                    <span className="text-red-600 flex items-center">
+                      <AlertTriangle className="w-3 h-3 mr-1" /> Unstable
+                    </span>
+                  }
+                </div>
+              </div>
+              
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="text-sm font-medium text-gray-500 mb-2">Critical Alerts</div>
+                <div className="flex items-baseline">
+                  <span className="text-2xl font-bold text-gray-900">
+                    {dashboardData?.criticalAlerts || 
+                     (recentLogs && recentLogs.filter(log => log.status === 'offline' && new Date(log.timestamp) > new Date(Date.now() - 24 * 60 * 60 * 1000)).length) || '0'}
+                  </span>
+                </div>
+                <div className="mt-2 text-xs text-gray-500">
+                  {(!dashboardData?.criticalAlerts && 
+                    (!recentLogs || recentLogs.filter(log => log.status === 'offline' && new Date(log.timestamp) > new Date(Date.now() - 24 * 60 * 60 * 1000)).length === 0)) ? 
+                    <span className="text-green-600 flex items-center">
+                      <ThumbsUp className="w-3 h-3 mr-1" /> All clear
+                    </span> : 
+                    <span className="text-red-600 flex items-center">
+                      <AlertOctagon className="w-3 h-3 mr-1" /> Needs attention
+                    </span>
+                  }
                 </div>
               </div>
             </div>
@@ -642,36 +781,6 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="card shadow-lg">
-        <div className="card-header bg-gradient-to-r from-gray-100 to-slate-100 p-4">
-          <div className="flex items-center space-x-2">
-            <FileCog className="h-5 w-5 text-slate-600" />
-            <h3 className="text-lg font-medium text-gray-900">Quick Actions</h3>
-          </div>
-        </div>
-        <div className="card-body p-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-            <button className="btn btn-primary">
-              <Server className="w-4 h-4 mr-2" />
-              Add Device
-            </button>
-            <button className="btn btn-secondary">
-              <Activity className="w-4 h-4 mr-2" />
-              View Monitoring
-            </button>
-            <button className="btn btn-secondary">
-              <TrendingUp className="w-4 h-4 mr-2" />
-              View Reports
-            </button>
-            <button className="btn btn-secondary">
-              <Clock className="w-4 h-4 mr-2" />
-              View Logs
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Modal Device Performance */}
       {showPerformanceModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
@@ -694,6 +803,14 @@ const Dashboard = () => {
                   <div>
                     <h4 className="text-xs text-gray-500 uppercase tracking-wide">Device Performance Analysis</h4>
                   </div>
+                  <button 
+                    onClick={handleRefresh}
+                    className="btn btn-sm btn-secondary"
+                    disabled={refreshing}
+                  >
+                    <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+                    Refresh Data
+                  </button>
                 </div>
               </div>
 
@@ -706,293 +823,40 @@ const Dashboard = () => {
                       margin={{ top: 5, right: 30, left: 120, bottom: 5 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
-                      <XAxis type="number" tick={{ fontSize: 11 }} />
+                      <XAxis type="number" tick={{ fontSize: 11 }} domain={[0, 100]} />
                       <YAxis 
                         type="category" 
-                        dataKey="name" 
-                        width={120} 
+                        dataKey="name"
                         tick={{ fontSize: 11 }}
+                        width={110}
                       />
                       <Tooltip 
-                        formatter={(value, name) => {
-                          if (name === 'responseTime') return [`${value} ms`, 'Response Time'];
-                          return [value, name];
+                        formatter={(value) => [`${value}%`, '']}
+                        contentStyle={{
+                          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                          borderRadius: '6px',
+                          borderColor: '#e2e8f0',
+                          boxShadow: '0 2px 5px rgba(0,0,0,0.1)'
                         }}
                       />
-                      <Legend wrapperStyle={{ fontSize: 11 }} />
-                      <Bar 
-                        dataKey="responseTime" 
-                        name="Response Time" 
-                        fill="#4F46E5"
-                        barSize={12}
-                        radius={[0, 4, 4, 0]}
-                      />
+                      <Legend wrapperStyle={{ paddingTop: 10 }} />
+                      <Bar dataKey="cpuUsage" name="CPU" fill="#ef4444" barSize={20} />
+                      <Bar dataKey="memoryUsage" name="Memory" fill="#8b5cf6" barSize={20} />
+                      <Bar dataKey="diskUsage" name="Disk" fill="#10b981" barSize={20} />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center">
                       <AlertCircle className="mx-auto h-12 w-12 text-gray-400" />
-                      <h3 className="mt-2 text-lg font-medium text-gray-900">Tidak ada router ditemukan</h3>
-                      <p className="mt-1 text-sm text-gray-500">
-                        Belum ada perangkat tipe router yang ditambahkan ke sistem monitoring.
+                      <p className="text-gray-500 mt-2">No performance data available</p>
+                      <p className="text-gray-400 text-sm mt-1">
+                        Try adding router devices to view performance metrics
                       </p>
                     </div>
                   </div>
                 )}
               </div>
-              
-              <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Response Time Metrics</h4>
-                  <ul className="space-y-2 text-sm">
-                    <li className="flex justify-between">
-                      <span className="text-gray-600">Best Performer:</span>
-                      <span className="font-medium">{devicePerformanceData.length > 0 ? devicePerformanceData.sort((a, b) => a.responseTime - b.responseTime)[0]?.name : 'None'}</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span className="text-gray-600">Worst Performer:</span>
-                      <span className="font-medium">{devicePerformanceData.length > 0 ? devicePerformanceData.sort((a, b) => b.responseTime - a.responseTime)[0]?.name : 'None'}</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span className="text-gray-600">Average Response:</span>
-                      <span className="font-medium">{devicePerformanceData.length > 0 ? `${Math.round(devicePerformanceData.reduce((sum, device) => sum + device.responseTime, 0) / devicePerformanceData.length)} ms` : 'N/A'}</span>
-                    </li>
-                  </ul>
-                </div>
-                <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Performance Status</h4>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Devices {">"} 150ms:</span>
-                      <span className="font-medium">{devicePerformanceData.filter(d => d.responseTime > 150).length}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Devices {"<"} 50ms:</span>
-                      <span className="font-medium">{devicePerformanceData.filter(d => d.responseTime < 50).length}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Median Response:</span>
-                      <span className="font-medium">{devicePerformanceData.length > 0 ? 
-                        `${devicePerformanceData.sort((a, b) => a.responseTime - b.responseTime)[Math.floor(devicePerformanceData.length / 2)]?.responseTime} ms` : 'N/A'}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-100">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Performance Trends</h4>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Last Hour Change:</span>
-                      <span className="font-medium text-green-600 flex items-center">
-                        <TrendingUp className="h-3 w-3 mr-1" /> -8ms
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">24h Average:</span>
-                      <span className="font-medium">102ms</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Overall Status:</span>
-                      <span className="font-medium text-green-600">Good</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center justify-end p-4 border-t border-gray-200">
-              <button
-                onClick={() => setShowPerformanceModal(false)}
-                className="btn btn-primary"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Modal Uptime for All Devices */}
-      {showUptimeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="bg-white rounded-lg shadow-lg w-11/12 max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between p-4 border-b border-gray-200">
-              <div className="flex items-center space-x-2">
-                <TrendingUp className="h-5 w-5 text-green-600" />
-                <h3 className="text-lg font-medium">Network Uptime - All Devices</h3>
-              </div>
-              <button 
-                onClick={() => setShowUptimeModal(false)}
-                className="p-2 rounded-full hover:bg-gray-100"
-              >
-                <XCircle className="h-5 w-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="p-6 flex-1 overflow-auto">
-              <div className="mb-4">
-                <div className="flex justify-between items-center mb-3">
-                  <div>
-                    <h4 className="text-xs text-gray-500 uppercase tracking-wide">Average Uptime Across All Devices</h4>
-                    <div className="flex items-center">
-                      <span className="text-3xl font-bold text-green-600">
-                        {calculateAverageUptime().toFixed(1)}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="bg-green-50 p-3 rounded-lg">
-                    <div className="flex items-center space-x-6">
-                      <div className="flex items-center">
-                        <div className="p-2 bg-green-100 rounded-full">
-                          <CheckCircle className="h-5 w-5 text-green-600" />
-                        </div>
-                        <div className="ml-2">
-                          <p className="text-xs text-gray-500">Online Devices</p>
-                          <p className="text-lg font-semibold">{stats.online}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center">
-                        <div className="p-2 bg-red-100 rounded-full">
-                          <XCircle className="h-5 w-5 text-red-600" />
-                        </div>
-                        <div className="ml-2">
-                          <p className="text-xs text-gray-500">Offline Devices</p>
-                          <p className="text-lg font-semibold">{stats.offline}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-4 mb-6">
-                  <div 
-                    className="bg-green-500 h-4 rounded-full transition-all duration-500" 
-                    style={{ width: `${calculateAverageUptime()}%` }}
-                  ></div>
-                </div>
-              </div>
-
-              <div className="h-[400px]">
-                {devicePerformanceData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={devicePerformanceData}
-                      layout="vertical"
-                      margin={{ top: 5, right: 30, left: 120, bottom: 5 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
-                      <XAxis 
-                        type="number" 
-                        domain={[0, 100]}
-                        tick={{ fontSize: 11 }}
-                      />
-                      <YAxis 
-                        type="category" 
-                        dataKey="name" 
-                        width={120} 
-                        tick={{ fontSize: 11 }}
-                      />
-                      <Tooltip 
-                        formatter={(value, name) => {
-                          if (name === 'uptime') return [`${value.toFixed(1)}%`, 'Uptime'];
-                          if (name === 'downtime') return [`${value.toFixed(1)}%`, 'Downtime'];
-                          return [value, name];
-                        }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: 11 }} />
-                      <Bar 
-                        dataKey="uptime" 
-                        name="Uptime" 
-                        stackId="a" 
-                        fill="#10B981"
-                        barSize={12}
-                        radius={[0, 4, 4, 0]}
-                      />
-                      <Bar 
-                        dataKey="downtime" 
-                        name="Downtime" 
-                        stackId="a" 
-                        fill="#F87171"
-                        barSize={12}
-                        radius={[0, 4, 4, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center">
-                      <AlertCircle className="mx-auto h-12 w-12 text-gray-400" />
-                      <h3 className="mt-2 text-lg font-medium text-gray-900">Tidak ada perangkat</h3>
-                      <p className="mt-1 text-sm text-gray-500">
-                        Belum ada perangkat yang ditambahkan ke sistem monitoring.
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-              
-              <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Device Status Key Metrics</h4>
-                  <ul className="space-y-2 text-sm">
-                    <li className="flex justify-between">
-                      <span className="text-gray-600">Best Performer:</span>
-                      <span className="font-medium">{devicePerformanceData.length > 0 ? devicePerformanceData.sort((a, b) => b.uptime - a.uptime)[0]?.name : 'None'}</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span className="text-gray-600">Worst Performer:</span>
-                      <span className="font-medium">{devicePerformanceData.length > 0 ? devicePerformanceData.sort((a, b) => a.uptime - b.uptime)[0]?.name : 'None'}</span>
-                    </li>
-                    <li className="flex justify-between">
-                      <span className="text-gray-600">Devices Below 95%:</span>
-                      <span className="font-medium">{devicePerformanceData.filter(d => d.uptime < 95).length}</span>
-                    </li>
-                  </ul>
-                </div>
-                <div className="bg-green-50 p-4 rounded-lg border border-green-100">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Monthly Uptime Average</h4>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Current Month:</span>
-                      <span className="font-medium text-green-600">{(calculateAverageUptime() + 1.2).toFixed(1)}%</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Previous Month:</span>
-                      <span className="font-medium">{(calculateAverageUptime() - 0.8).toFixed(1)}%</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Trend:</span>
-                      <span className="font-medium text-green-600 flex items-center">
-                        <TrendingUp className="h-3 w-3 mr-1" /> Improving
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">SLA Status</h4>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">SLA Target:</span>
-                      <span className="font-medium">99.5%</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Devices Meeting SLA:</span>
-                      <span className="font-medium">{devicePerformanceData.filter(d => d.uptime >= 99.5).length}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Overall Status:</span>
-                      <span className={`font-medium ${calculateAverageUptime() >= 99.5 ? 'text-green-600' : 'text-amber-600'}`}>
-                        {calculateAverageUptime() >= 99.5 ? 'Meeting SLA' : 'Below SLA'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center justify-end p-4 border-t border-gray-200">
-              <button
-                onClick={() => setShowUptimeModal(false)}
-                className="btn btn-primary"
-              >
-                Close
-              </button>
             </div>
           </div>
         </div>

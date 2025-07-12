@@ -11,7 +11,13 @@ import {
   CheckCircle,
   XCircle,
   Eye,
-  Calendar
+  Calendar,
+  Server,
+  Zap,
+  Upload,
+  Terminal,
+  Wifi,
+  BarChart2
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -19,6 +25,8 @@ import useDevices from '../hooks/useDevices';
 import monitoringService from '../services/monitoringService';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import StatusBadge from '../components/common/StatusBadge';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend, LineChart, Line, BarChart, Bar } from 'recharts';
+import { format, formatDistanceToNow, parseISO } from 'date-fns';
 
 const Monitoring = () => {
   const { user } = useAuth();
@@ -41,12 +49,10 @@ const Monitoring = () => {
     total: 0,
     pages: 0
   });
+  const [selectedMetrics, setSelectedMetrics] = useState(['cpuLoad', 'memoryUsage', 'diskUsage']);
 
-  useEffect(() => {
-    fetchLogs();
-  }, [filters, pagination.page]);
-
-  const fetchLogs = async () => {
+  // Memoize fetch function to prevent dependency changes
+  const fetchLogs = React.useCallback(async () => {
     try {
       setLoading(true);
       const params = {
@@ -71,8 +77,13 @@ const Monitoring = () => {
       console.error('Error fetching logs:', error);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, [filters, pagination.page, pagination.limit]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -121,32 +132,71 @@ const Monitoring = () => {
     }
   };
 
+  // Format timestamp for display
   const formatTimestamp = (timestamp) => {
-    return new Date(timestamp).toLocaleString();
+    if (!timestamp) return 'N/A';
+    try {
+      const date = new Date(timestamp);
+      return date.toLocaleString();
+    } catch (e) {
+      return 'Invalid date';
+    }
   };
 
+  // Format duration since timestamp
   const formatDuration = (timestamp) => {
-    const now = new Date();
-    const logTime = new Date(timestamp);
-    const diffMs = now - logTime;
+    if (!timestamp) return 'N/A';
+    try {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const diffMs = now - date;
+      
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+      const diffHours = Math.floor(diffMins / 60);
+      const diffDays = Math.floor(diffHours / 24);
+      
+      if (diffDays > 0) return `${diffDays}d ago`;
+      if (diffHours > 0) return `${diffHours}h ago`;
+      if (diffMins > 0) return `${diffMins}m ago`;
+      return 'Just now';
+    } catch (e) {
+      return 'Unknown';
+    }
+  };
+
+  // Format bandwidth for display
+  const formatBandwidth = (value) => {
+    if (!value && value !== 0) return 'N/A';
+    if (value < 1024) return `${value.toFixed(2)} KB/s`;
+    if (value < 1048576) return `${(value / 1024).toFixed(2)} MB/s`;
+    return `${(value / 1048576).toFixed(2)} GB/s`;
+  };
+
+  // Get color based on bandwidth usage
+  const getBandwidthColor = (value, max = 1000) => {
+    if (!value && value !== 0) return 'text-gray-500';
+    const percentage = (value / max) * 100;
+    if (percentage > 90) return 'text-red-600';
+    if (percentage > 70) return 'text-yellow-600';
+    if (percentage > 50) return 'text-blue-600';
+    return 'text-green-600';
+  };
+
+  // Format uptime display
+  const formatUptime = (seconds) => {
+    if (!seconds && seconds !== 0) return 'N/A';
     
-    const diffMins = Math.floor(diffMs / (1000 * 60));
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
     
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    return `${diffDays}d ago`;
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
   };
 
   const exportLogs = async () => {
     try {
-      const params = {
-        ...filters,
-        limit: 10000, // Large limit for export
-        format: 'csv'
-      };
-      
       // This would typically call an export endpoint
       toast.info('Export functionality will be implemented');
     } catch (error) {
@@ -180,6 +230,121 @@ const Monitoring = () => {
             <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </button>
+        </div>
+      </div>
+
+      {/* Monitoring Dashboard */}
+      <div className="mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Total Devices Card */}
+          <div className="bg-white rounded-lg shadow p-5 border border-gray-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-500">Total Devices</p>
+                <p className="text-2xl font-bold text-gray-900">{devices.length}</p>
+              </div>
+              <div className="p-3 rounded-full bg-primary-50">
+                <Server className="w-6 h-6 text-primary-500" />
+              </div>
+            </div>
+            <div className="mt-4 flex items-center justify-between text-sm">
+              <div className="flex items-center">
+                <span className="h-3 w-3 rounded-full bg-green-500 mr-1.5"></span>
+                <span className="text-gray-600">Online: {devices.filter(d => d.status === 'online').length}</span>
+              </div>
+              <div className="flex items-center">
+                <span className="h-3 w-3 rounded-full bg-red-500 mr-1.5"></span>
+                <span className="text-gray-600">Offline: {devices.filter(d => d.status === 'offline').length}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Network Traffic Card */}
+          <div className="bg-white rounded-lg shadow p-5 border border-gray-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-500">Network Traffic</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatBandwidth(logs.reduce((sum, log) => sum + (log.bandwidth || 0), 0))}
+                </p>
+              </div>
+              <div className="p-3 rounded-full bg-blue-50">
+                <Activity className="w-6 h-6 text-blue-500" />
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="flex items-center">
+                <Download className="w-4 h-4 text-green-500 mr-1.5" />
+                <span className="text-sm text-gray-600">
+                  {formatBandwidth(logs.reduce((sum, log) => sum + (log.downloadBandwidth || 0), 0))}
+                </span>
+              </div>
+              <div className="flex items-center">
+                <Upload className="w-4 h-4 text-blue-500 mr-1.5" />
+                <span className="text-sm text-gray-600">
+                  {formatBandwidth(logs.reduce((sum, log) => sum + (log.uploadBandwidth || 0), 0))}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* System Health Card */}
+          <div className="bg-white rounded-lg shadow p-5 border border-gray-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-500">System Health</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {logs.some(log => log.cpuUsage > 90 || log.memoryUsage > 90) ? 'Warning' : 'Good'}
+                </p>
+              </div>
+              <div className="p-3 rounded-full bg-purple-50">
+                <Zap className="w-6 h-6 text-purple-500" />
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <div>
+                <p className="text-xs text-gray-500">Avg CPU</p>
+                <p className={`text-sm font-medium ${getBandwidthColor(logs.reduce((sum, log) => sum + (log.cpuUsage || 0), 0) / (logs.length || 1), 100)}`}>
+                  {(logs.reduce((sum, log) => sum + (log.cpuUsage || 0), 0) / (logs.length || 1)).toFixed(1)}%
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Avg Memory</p>
+                <p className={`text-sm font-medium ${getBandwidthColor(logs.reduce((sum, log) => sum + (log.memoryUsage || 0), 0) / (logs.length || 1), 100)}`}>
+                  {(logs.reduce((sum, log) => sum + (log.memoryUsage || 0), 0) / (logs.length || 1)).toFixed(1)}%
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Uptime Card */}
+          <div className="bg-white rounded-lg shadow p-5 border border-gray-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-500">Avg. Uptime</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatUptime(logs.reduce((sum, log) => sum + (log.uptime || 0), 0) / (logs.length || 1))}
+                </p>
+              </div>
+              <div className="p-3 rounded-full bg-green-50">
+                <Clock className="w-6 h-6 text-green-500" />
+              </div>
+            </div>
+            <div className="mt-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500">Availability</span>
+                <span className="text-xs font-medium text-gray-700">
+                  {((devices.filter(d => d.status === 'online').length / (devices.length || 1)) * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                <div 
+                  className="bg-green-500 h-1.5 rounded-full" 
+                  style={{ width: `${(devices.filter(d => d.status === 'online').length / (devices.length || 1)) * 100}%` }}
+                ></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -264,6 +429,187 @@ const Monitoring = () => {
           </div>
         </div>
       </div>
+
+      {/* Traffic Overview */}
+      <div className="card mb-6">
+        <div className="card-header">
+          <h2 className="card-title">Traffic Overview</h2>
+          <div className="flex items-center space-x-3">
+            <select 
+              value={filters.timeRange || '24h'} 
+              onChange={(e) => handleFilterChange('timeRange', e.target.value)}
+              className="select select-sm"
+            >
+              <option value="1h">Last Hour</option>
+              <option value="24h">Last 24 Hours</option>
+              <option value="7d">Last 7 Days</option>
+              <option value="30d">Last 30 Days</option>
+            </select>
+          </div>
+        </div>
+        <div className="card-body">
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={logs.slice(0, 20).map(log => ({
+                  time: formatTimestamp(log.timestamp),
+                  download: log.downloadBandwidth || 0,
+                  upload: log.uploadBandwidth || 0,
+                  total: (log.downloadBandwidth || 0) + (log.uploadBandwidth || 0)
+                }))}
+                margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+              >
+                <defs>
+                  <linearGradient id="colorDownload" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.8}/>
+                    <stop offset="95%" stopColor="#10B981" stopOpacity={0.1}/>
+                  </linearGradient>
+                  <linearGradient id="colorUpload" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.8}/>
+                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.1}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="time" tick={{ fontSize: 12 }} />
+                <YAxis 
+                  tick={{ fontSize: 12 }}
+                  tickFormatter={(value) => formatBandwidth(value).split(' ')[0]}
+                />
+                <Tooltip 
+                  formatter={(value) => [formatBandwidth(value), '']}
+                  labelFormatter={(label) => `Time: ${label}`}
+                  contentStyle={{ 
+                    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                    borderRadius: '6px',
+                    borderColor: '#e5e7eb',
+                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+                  }}
+                />
+                <Legend 
+                  iconType="circle" 
+                  wrapperStyle={{ paddingTop: 10 }}
+                  formatter={(value) => <span style={{ color: '#6B7280', fontSize: 12 }}>{value.charAt(0).toUpperCase() + value.slice(1)}</span>} 
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="download" 
+                  name="Download" 
+                  stroke="#10B981" 
+                  fillOpacity={1} 
+                  fill="url(#colorDownload)" 
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="upload" 
+                  name="Upload" 
+                  stroke="#3B82F6" 
+                  fillOpacity={1} 
+                  fill="url(#colorUpload)" 
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* Active Device Status */}
+      {devices.filter(d => d.status === 'online').length > 0 && (
+        <div className="card mb-6">
+          <div className="card-header">
+            <h2 className="card-title">Active Device Status</h2>
+            <button 
+              onClick={fetchLogs}
+              className="btn btn-sm btn-outline flex items-center"
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Refresh
+            </button>
+          </div>
+          <div className="card-body p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CPU</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Memory</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Traffic</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Uptime</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {devices.filter(d => d.status === 'online').slice(0, 5).map(device => {
+                    // Find the most recent log for this device
+                    const deviceLog = logs.find(log => log.deviceId === device._id) || {};
+                    return (
+                      <tr key={device._id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <div className="flex-shrink-0 h-9 w-9 bg-gray-100 rounded-full flex items-center justify-center">
+                              <Server className="h-5 w-5 text-gray-500" />
+                            </div>
+                            <div className="ml-3">
+                              <p className="text-sm font-medium text-gray-900">{device.name}</p>
+                              <p className="text-xs text-gray-500">{device.ipAddress}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex flex-col">
+                            <span className={`text-sm font-medium ${getBandwidthColor(deviceLog.cpuUsage || 0, 100)}`}>
+                              {deviceLog.cpuUsage ? `${deviceLog.cpuUsage}%` : 'N/A'}
+                            </span>
+                            <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                              <div 
+                                className={`h-1.5 rounded-full ${deviceLog.cpuUsage > 90 ? 'bg-red-500' : deviceLog.cpuUsage > 70 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                                style={{ width: `${deviceLog.cpuUsage || 0}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex flex-col">
+                            <span className={`text-sm font-medium ${getBandwidthColor(deviceLog.memoryUsage || 0, 100)}`}>
+                              {deviceLog.memoryUsage ? `${deviceLog.memoryUsage}%` : 'N/A'}
+                            </span>
+                            <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                              <div 
+                                className={`h-1.5 rounded-full ${deviceLog.memoryUsage > 90 ? 'bg-red-500' : deviceLog.memoryUsage > 70 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                                style={{ width: `${deviceLog.memoryUsage || 0}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="grid grid-cols-2 gap-1">
+                            <div className="flex items-center">
+                              <Download className="w-4 h-4 text-green-500 mr-1" />
+                              <span className="text-xs text-gray-600">
+                                {formatBandwidth(deviceLog.downloadBandwidth || 0)}
+                              </span>
+                            </div>
+                            <div className="flex items-center">
+                              <Upload className="w-4 h-4 text-blue-500 mr-1" />
+                              <span className="text-xs text-gray-600">
+                                {formatBandwidth(deviceLog.uploadBandwidth || 0)}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm text-gray-600">
+                            {formatUptime(deviceLog.uptime || 0)}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Monitoring Logs */}
       <div className="card">
@@ -415,6 +761,134 @@ const Monitoring = () => {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Resource Usage Chart */}
+      <div className="card mb-6">
+        <div className="card-header">
+          <h2 className="card-title">Resource Usage Trends</h2>
+          <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2">
+              <input 
+                type="checkbox" 
+                id="cpuCheck" 
+                checked={selectedMetrics.includes('cpuLoad')}
+                onChange={() => {
+                  if (selectedMetrics.includes('cpuLoad')) {
+                    setSelectedMetrics(selectedMetrics.filter(m => m !== 'cpuLoad'));
+                  } else {
+                    setSelectedMetrics([...selectedMetrics, 'cpuLoad']);
+                  }
+                }}
+                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+              />
+              <label htmlFor="cpuCheck" className="text-sm text-gray-600">CPU</label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <input 
+                type="checkbox" 
+                id="memCheck" 
+                checked={selectedMetrics.includes('memoryUsage')}
+                onChange={() => {
+                  if (selectedMetrics.includes('memoryUsage')) {
+                    setSelectedMetrics(selectedMetrics.filter(m => m !== 'memoryUsage'));
+                  } else {
+                    setSelectedMetrics([...selectedMetrics, 'memoryUsage']);
+                  }
+                }}
+                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+              />
+              <label htmlFor="memCheck" className="text-sm text-gray-600">Memory</label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <input 
+                type="checkbox" 
+                id="diskCheck" 
+                checked={selectedMetrics.includes('diskUsage')}
+                onChange={() => {
+                  if (selectedMetrics.includes('diskUsage')) {
+                    setSelectedMetrics(selectedMetrics.filter(m => m !== 'diskUsage'));
+                  } else {
+                    setSelectedMetrics([...selectedMetrics, 'diskUsage']);
+                  }
+                }}
+                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+              />
+              <label htmlFor="diskCheck" className="text-sm text-gray-600">Disk</label>
+            </div>
+          </div>
+        </div>
+        <div className="card-body">
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={logs.slice(0, 20).map(log => ({
+                  time: formatTimestamp(log.timestamp),
+                  cpuLoad: log.cpuUsage || 0,
+                  memoryUsage: log.memoryUsage || 0,
+                  diskUsage: log.diskUsage || 0
+                }))}
+                margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="time" tick={{ fontSize: 12 }} />
+                <YAxis 
+                  tick={{ fontSize: 12 }}
+                  domain={[0, 100]}
+                  tickFormatter={(value) => `${value}%`}
+                />
+                <Tooltip 
+                  formatter={(value) => [`${value}%`, '']}
+                  labelFormatter={(label) => `Time: ${label}`}
+                  contentStyle={{ 
+                    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                    borderRadius: '6px',
+                    borderColor: '#e5e7eb',
+                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+                  }}
+                />
+                <Legend 
+                  iconType="circle" 
+                  wrapperStyle={{ paddingTop: 10 }}
+                  formatter={(value) => <span style={{ color: '#6B7280', fontSize: 12 }}>{value.charAt(0).toUpperCase() + value.slice(1)}</span>} 
+                />
+                {selectedMetrics.includes('cpuLoad') && (
+                  <Line 
+                    type="monotone" 
+                    dataKey="cpuLoad" 
+                    name="CPU Usage" 
+                    stroke="#EF4444" 
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5, strokeWidth: 0 }}
+                  />
+                )}
+                {selectedMetrics.includes('memoryUsage') && (
+                  <Line 
+                    type="monotone" 
+                    dataKey="memoryUsage" 
+                    name="Memory Usage" 
+                    stroke="#8B5CF6" 
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5, strokeWidth: 0 }}
+                  />
+                )}
+                {selectedMetrics.includes('diskUsage') && (
+                  <Line 
+                    type="monotone" 
+                    dataKey="diskUsage" 
+                    name="Disk Usage" 
+                    stroke="#10B981" 
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5, strokeWidth: 0 }}
+                  />
+                )}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
     </div>

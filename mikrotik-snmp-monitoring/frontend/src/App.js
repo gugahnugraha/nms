@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { NotificationProvider } from './context/NotificationContext';
 import Layout from './components/layout/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -47,23 +48,25 @@ function App() {
   return (
     <Router>
       <AuthProvider>
-        <div className="App">
-          <Toaster
-            position="top-right"
-            toastOptions={{
-              duration: 4000,
-              style: {
-                background: '#363636',
-                color: '#fff',
-              },
-              success: {
-                duration: 3000,
-                theme: {
-                  primary: '#11b6d4',
-                  secondary: '#ffffff',
+        <NotificationProvider>
+          <div className="App">
+            <Toaster
+              position="top-right"
+              toastOptions={{
+                duration: 4000,
+                style: {
+                  background: '#363636',
+                  color: '#fff',
                 },
-              },
-            }}
+                success: {
+                  duration: 3000,
+                  theme: {
+                    primary: '#11b6d4',
+                    secondary: '#ffffff',
+                  },
+                },
+              }}
+            />
           />
           
           <Routes>
@@ -157,6 +160,7 @@ function App() {
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </div>
+        </NotificationProvider>
       </AuthProvider>
     </Router>
   );

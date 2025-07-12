@@ -10,7 +10,13 @@ import {
   ExternalLink,
   Signal,
   Edit,
-  Server
+  Server,
+  Router,
+  Network,
+  Cpu,
+  Laptop,
+  Smartphone,
+  Wifi
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import useDevices from '../hooks/useDevices';
@@ -138,6 +144,49 @@ const Devices = () => {
     };
   };
 
+  // Calculate device type statistics
+  const getDeviceTypeStats = () => {
+    if (!devices || devices.length === 0) {
+      return [];
+    }
+    
+    // Group devices by type
+    const typeCount = {};
+    const totalDevices = devices.length;
+    
+    devices.forEach(device => {
+      const type = device.deviceType || 'Unknown';
+      if (!typeCount[type]) {
+        typeCount[type] = 0;
+      }
+      typeCount[type]++;
+    });
+    
+    // Convert to array for rendering
+    return Object.keys(typeCount).map(type => {
+      const count = typeCount[type];
+      const percentage = Math.round((count / totalDevices) * 100);
+      
+      let color = 'gray';
+      if (type === 'Router') color = 'blue';
+      else if (type === 'Switch') color = 'green';
+      else if (type === 'Access Point') color = 'yellow';
+      else if (type === 'Server') color = 'indigo';
+      
+      return {
+        type,
+        count,
+        percentage,
+        color,
+        icon: type === 'Router' ? <Router className="w-5 h-5" /> : 
+              type === 'Switch' ? <Network className="w-5 h-5" /> : 
+              type === 'Access Point' ? <Wifi className="w-5 h-5" /> :
+              type === 'Server' ? <Server className="w-5 h-5" /> :
+              <Server className="w-5 h-5" />
+      };
+    });
+  };
+
   const statusCounts = getStatusCounts();
 
   if (loading && devices.length === 0) {
@@ -234,6 +283,46 @@ const Devices = () => {
                 <div className="w-6 h-6 bg-gray-500 rounded-full"></div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Device Type Statistics */}
+      <div className="card shadow-lg">
+        <div className="card-header bg-gradient-to-r from-purple-50 to-indigo-50 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <Server className="h-5 w-5 text-indigo-600" />
+              <h3 className="text-lg font-medium text-gray-900">Device Types</h3>
+            </div>
+          </div>
+        </div>
+        <div className="card-body p-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {getDeviceTypeStats().map((stat) => (
+              <div key={stat.type} className="bg-gray-50 rounded-lg p-4">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">{stat.type}</p>
+                    <p className="text-xl font-bold text-gray-900">{stat.count}</p>
+                  </div>
+                  <div className={`p-2 bg-${stat.color}-100 rounded-lg`}>
+                    <div className={`w-5 h-5 text-${stat.color}-600`}>
+                      {stat.icon}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full bg-${stat.color}-500`} 
+                      style={{ width: `${stat.percentage}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">{stat.percentage}% of total devices</p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
