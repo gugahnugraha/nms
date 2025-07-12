@@ -75,83 +75,108 @@ const DeviceDetail = () => {
     }
   };
 
-  const fetchMetrics = async () => {
+  // Fetch collector status from SNMP Exporter
+  const fetchCollectorStatus = async () => {
+    setCollectorLoading(true);
     try {
-      setMetricsLoading(true);
-      console.log('Fetching metrics for device:', id, 'with time range:', timeRange);
-      
-      const [metricsResponse, logsResponse] = await Promise.all([
-        monitoringService.getDeviceMetrics(id, timeRange),
-        monitoringService.getDeviceLogs(id, { limit: 20 })
-      ]);
-      
-      // Handle API response format: { success: true, data: [...] }
-      const metricsData = metricsResponse?.data || [];
-      const logsData = logsResponse?.data || [];
-      
-      console.log('Received metrics data:', metricsData);
-      
-      if (Array.isArray(metricsData) && metricsData.length > 0) {
-        console.log('First metric:', metricsData[0]);
-        console.log('Last metric:', metricsData[metricsData.length - 1]);
-        setMetrics(metricsData);
+      const response = await snmpExporterService.getCollectorStatus(id);
+      if (response.success) {
+        setCollectorStatus(response.data);
       } else {
-        console.warn('No metrics data received or data is empty');
-        // If no historical metrics, try to get real-time metrics
-        await fetchRealTimeMetrics();
+        setCollectorStatus(null);
       }
-      
-      setRecentLogs(Array.isArray(logsData.logs) ? logsData.logs : []);
-    } catch (error) {
-      console.error('Failed to fetch metrics:', error);
-      toast.error('Failed to load metrics data');
-      
-      // If regular metrics failed, try real-time metrics
-      await fetchRealTimeMetrics();
+    } catch (err) {
+      setCollectorStatus(null);
+    } finally {
+      setCollectorLoading(false);
+    }
+  };
+
+  // Start SNMP collector for this device
+  const handleStartCollector = async () => {
+    setCollectorLoading(true);
+    try {
+      const response = await snmpExporterService.startCollector(id);
+      if (response.success) {
+        await fetchCollectorStatus();
+      }
+    } catch (err) {
+      // handle error
+    } finally {
+      setCollectorLoading(false);
+    }
+  };
+
+  // Stop SNMP collector for this device
+  const handleStopCollector = async () => {
+    setCollectorLoading(true);
+    try {
+      const response = await snmpExporterService.stopCollector(id);
+      if (response.success) {
+        await fetchCollectorStatus();
+      }
+    } catch (err) {
+      // handle error
+    } finally {
+      setCollectorLoading(false);
+    }
+  };
+
+  // Fetch latest metrics from SNMP Exporter
+  const fetchMetrics = async () => {
+    setMetricsLoading(true);
+    try {
+      const response = await snmpExporterService.getLatestMetrics(id);
+      if (response.success && response.data) {
+        setMetrics([response.data]);
+      } else {
+        setMetrics([]);
+      }
+    } catch (err) {
+      setMetrics([]);
+    } finally {
+      setMetricsLoading(false);
+    }
+  };
+
+  // Optionally, fetch real-time metrics if needed
+  const fetchRealTimeMetrics = async () => {
+    setMetricsLoading(true);
+    try {
+      // You can use monitoringService.getRealTimeMetrics(id) if needed
+      // Or use snmpExporterService.getLatestMetrics(id) for latest
+      const response = await snmpExporterService.getLatestMetrics(id);
+      if (response.success && response.data) {
+        setRealTimeMetrics(response.data);
+      } else {
+        setRealTimeMetrics(null);
+      }
+    } catch (err) {
+      setRealTimeMetrics(null);
     } finally {
       setMetricsLoading(false);
     }
   };
   
-  const fetchRealTimeMetrics = async () => {
+  const fetchLogs = async () => {
     try {
-      console.log('Fetching real-time metrics for device:', id);
-      const response = await monitoringService.getRealTimeMetrics(id);
-      
-      if (response.success && response.data) {
-        console.log('Received real-time metrics:', response.data);
-        
-        // Convert the single metric into an array format for the charts
-        const fakeTimestamp = new Date();
-        fakeTimestamp.setMinutes(fakeTimestamp.getMinutes() - 5);
-        
-        const realTimeMetrics = [
-          {
-            timestamp: fakeTimestamp,
-            cpuUsage: response.data.cpuUsage,
-            memoryUsage: response.data.memoryUsage,
-            diskUsage: response.data.diskUsage,
-            responseTime: response.data.responseTime
-          },
-          {
-            timestamp: response.data.timestamp,
-            cpuUsage: response.data.cpuUsage,
-            memoryUsage: response.data.memoryUsage,
-            diskUsage: response.data.diskUsage,
-            responseTime: response.data.responseTime
-          }
-        ];
-        
-        setMetrics(realTimeMetrics);
-        toast.success('Real-time metrics loaded');
-      } else {
-        console.warn('No real-time metrics data received');
-      }
+      const response = await monitoringService.getDeviceLogs(id, { limit: 20 });
+      setRecentLogs(response.data.logs || []);
     } catch (error) {
-      console.error('Failed to fetch real-time metrics:', error);
-      toast.error('Failed to load real-time metrics');
+      console.error('Failed to fetch logs:', error);
     }
   };
+
+  // Fetch interface performance metrics for a device
+  const fetchInterfaceMetrics = async () => {
+    try {
+      const interfaces = await snmpExporterService.getInterfaceMetrics(id);
+      setInterfaceTrafficHistory(interfaces);
+    } catch (err) {
+      setInterfaceTrafficHistory([]);
+    }
+  };
+
   useEffect(() => {
     fetchDeviceData();
   }, [id]); // Only depend on id, not fetchDeviceData
@@ -174,107 +199,38 @@ const DeviceDetail = () => {
     }
   }, [device, timeRange]); // Remove fetchMetrics dependency
 
+  // Start with fetching logs
+  useEffect(() => {
+    fetchLogs();
+  }, [id]);
+
+  // Re-fetch logs every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchLogs();
+    }, 60000); // 60 seconds
+
+    return () => clearInterval(interval);
+  }, [id]);
+
   // Fetch collector status
-  const fetchCollectorStatus = async () => {
-    if (!id || !user) return;
-    
-    try {
-      setCollectorLoading(true);
-      const response = await snmpExporterService.getCollectorStatus(id);
-      if (response.success) {
-        setCollectorStatus(response.data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch collector status:', error);
-    } finally {
-      setCollectorLoading(false);
-    }
-  };
+  useEffect(() => {
+    fetchCollectorStatus();
+  }, [id, user]); // Re-fetch if user changes
 
-  // Start the SNMP collector
-  const handleStartCollector = async () => {
-    try {
-      setCollectorLoading(true);
-      const response = await snmpExporterService.startCollector(id);
-      
-      if (response.success) {
-        toast.success('SNMP collector started');
-        setCollectorStatus({ ...collectorStatus, isActive: true, status: 'running' });
-      } else {
-        toast.error(response.message || 'Failed to start collector');
-      }
-    } catch (error) {
-      console.error('Error starting collector:', error);
-      toast.error('Failed to start SNMP collector');
-    } finally {
-      setCollectorLoading(false);
-    }
-  };
-
-  // Stop the SNMP collector
-  const handleStopCollector = async () => {
-    try {
-      setCollectorLoading(true);
-      const response = await snmpExporterService.stopCollector(id);
-      
-      if (response.success) {
-        toast.success('SNMP collector stopped');
-        setCollectorStatus({ ...collectorStatus, isActive: false, status: 'stopped' });
-      } else {
-        toast.error(response.message || 'Failed to stop collector');
-      }
-    } catch (error) {
-      console.error('Error stopping collector:', error);
-      toast.error('Failed to stop SNMP collector');
-    } finally {
-      setCollectorLoading(false);
-    }
-  };
-
-  // Get real-time metrics using SNMP Exporter
-  const handleGetDetailedMetrics = async () => {
-    try {
-      setShowRealTimeMetrics(true);
-      setCollectorLoading(true);
-      
-      const response = await snmpExporterService.getLatestMetrics(id);
-      
-      if (response.success) {
-        setRealTimeMetrics(response.data);
-        toast.success('Retrieved detailed metrics');
-      } else {
-        toast.error(response.message || 'Failed to get detailed metrics');
-      }
-    } catch (error) {
-      console.error('Error getting detailed metrics:', error);
-      toast.error('Failed to get detailed metrics');
-    } finally {
-      setCollectorLoading(false);
-    }
-  };
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await fetchDeviceData();
-      
-      // Try to get fresh real-time metrics first
-      try {
-        await fetchRealTimeMetrics();
-      } catch (realTimeError) {
-        console.error('Failed to get real-time metrics, falling back to historical metrics:', realTimeError);
+  // Fetch metrics and real-time data on demand
+  useEffect(() => {
+    if (device) {
+      const fetchData = async () => {
         await fetchMetrics();
-      }
-      
-      toast.success('Device data refreshed');
-    } catch (error) {
-      console.error('Error refreshing device data:', error);
-      toast.error('Failed to refresh device data');
-    } finally {
-      setRefreshing(false);
-    }
-  };
+        await fetchRealTimeMetrics();
+      };
 
+      fetchData();
+    }
+  }, [device, timeRange]); // Re-fetch if device or time range changes
+
+  // Ping device
   const handlePing = async () => {
     setIsPinging(true);
     setPingResult('');
@@ -1259,16 +1215,6 @@ const DeviceDetail = () => {
                             </td>
                             <td className="py-2 px-3 text-sm text-right">
                               {iface.ifInOctets 
-                                ? `${(iface.ifInOctets / 1024).toFixed(2)} KB` 
-                                : 'N/A'}
-                            </td>
-                            <td className="py-2 px-3 text-sm text-right">
-                              {iface.ifOutOctets 
-                                ? `${(iface.ifOutOctets / 1024).toFixed(2)} KB` 
-                                : 'N/A'}
-                            </td>
-                            <td className="py-2 px-3 text-sm text-right">
-                              {iface.ifInErrors || iface.ifOutErrors 
                                 ? `${iface.ifInErrors || 0} / ${iface.ifOutErrors || 0}` 
                                 : '0 / 0'}
                             </td>

@@ -167,13 +167,38 @@ const Dashboard = () => {
   const devices = dashboardData?.devices || [];
   const recentLogs = dashboardData?.recentLogs || [];
   
-  // Mock data for charts
-  const networkStatusData = generateMockChartData();
-  const devicePerformanceData = generateMockDevicePerformanceData();
-  // Add calculated downtime for each device
-  devicePerformanceData.forEach(device => {
-    device.downtime = 100 - device.uptime;
-  });
+  // Data for charts from backend
+  // Network status chart: aggregate logs for last 24h (or use backend-provided if available)
+  let networkStatusData = [];
+  if (dashboardData && dashboardData.recentLogs && dashboardData.recentLogs.length > 0) {
+    // Group logs by hour for the last 24h
+    const logsByHour = {};
+    dashboardData.recentLogs.forEach(log => {
+      const hour = new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (!logsByHour[hour]) logsByHour[hour] = { time: hour, online: 0, offline: 0 };
+      if (log.status === 'online') logsByHour[hour].online++;
+      if (log.status === 'offline') logsByHour[hour].offline++;
+    });
+    networkStatusData = Object.values(logsByHour).sort((a, b) => a.time.localeCompare(b.time));
+  }
+  // Device performance data: from uptimeStats (backend)
+  let devicePerformanceData = [];
+  if (dashboardData && dashboardData.uptimeStats && dashboardData.devices) {
+    // Map uptimeStats to device info
+    devicePerformanceData = dashboardData.uptimeStats.map(stat => {
+      const device = dashboardData.devices.find(d => d._id === String(stat._id));
+      return {
+        name: device ? device.name : 'Unknown',
+        responseTime: stat.avgResponseTime || 0,
+        uptime: stat.uptime || 0,
+        downtime: 100 - (stat.uptime || 0),
+        deviceType: device ? device.deviceType : '',
+      };
+    });
+  }
+  // Fallback: jika data kosong, gunakan mock agar UI tidak error
+  if (networkStatusData.length === 0) networkStatusData = generateMockChartData();
+  if (devicePerformanceData.length === 0) devicePerformanceData = generateMockDevicePerformanceData();
 
   return (
     <div className="p-6 space-y-6">

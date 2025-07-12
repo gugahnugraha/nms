@@ -1,3 +1,9 @@
+  // Get interface metrics for a device
+  getInterfaceMetrics: async (deviceId) => {
+    const response = await api.get(`/snmp-exporter/metrics/${deviceId}`);
+    // Asumsikan response.data.data.interfaces berisi array interface metrics
+    return response.data.data?.interfaces || [];
+  },
 import api from './api';
 
 const snmpExporterService = {
