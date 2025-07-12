@@ -367,6 +367,127 @@ const testSnmpConnectivity = async (device) => {
   }
 };
 
+/**
+ * Get network interfaces information
+ * @param {Object} device - Device object with SNMP configuration
+ * @returns {Array} Array of interface objects
+ */
+const getNetworkInterfaces = async (device) => {
+  try {
+    // First get number of interfaces
+    const ifNumberResult = await getSnmpData(device, [MIKROTIK_OIDS.ifNumber]);
+    const ifNumber = ifNumberResult[MIKROTIK_OIDS.ifNumber];
+    
+    if (!ifNumber) {
+      throw new Error('Could not determine number of interfaces');
+    }
+    
+    console.log(`Device ${device.name} has ${ifNumber} interfaces`);
+    
+    // For each interface, get description, status, and traffic data
+    const interfaces = [];
+    
+    for (let i = 1; i <= ifNumber; i++) {
+      const ifOids = [
+        `${MIKROTIK_OIDS.ifDescr}.${i}`,
+        `${MIKROTIK_OIDS.ifOperStatus}.${i}`,
+        `${MIKROTIK_OIDS.ifInOctets}.${i}`,
+        `${MIKROTIK_OIDS.ifOutOctets}.${i}`,
+        `${MIKROTIK_OIDS.ifInErrors}.${i}`,
+        `${MIKROTIK_OIDS.ifOutErrors}.${i}`
+      ];
+      
+      try {
+        const ifData = await getSnmpData(device, ifOids);
+        
+        interfaces.push({
+          index: i,
+          ifDescr: ifData[`${MIKROTIK_OIDS.ifDescr}.${i}`] || `Interface ${i}`,
+          ifOperStatus: parseInt(ifData[`${MIKROTIK_OIDS.ifOperStatus}.${i}`] || 0),
+          ifInOctets: parseInt(ifData[`${MIKROTIK_OIDS.ifInOctets}.${i}`] || 0),
+          ifOutOctets: parseInt(ifData[`${MIKROTIK_OIDS.ifOutOctets}.${i}`] || 0),
+          ifInErrors: parseInt(ifData[`${MIKROTIK_OIDS.ifInErrors}.${i}`] || 0),
+          ifOutErrors: parseInt(ifData[`${MIKROTIK_OIDS.ifOutErrors}.${i}`] || 0),
+          status: parseInt(ifData[`${MIKROTIK_OIDS.ifOperStatus}.${i}`]) === 1 ? 'up' : 'down'
+        });
+      } catch (err) {
+        console.error(`Error getting data for interface ${i}:`, err.message);
+      }
+    }
+    
+    return interfaces;
+  } catch (error) {
+    console.error('Error getting network interfaces:', error.message);
+    throw error;
+  }
+};
+
+/**
+ * Get storage information
+ * @param {Object} device - Device object with SNMP configuration
+ * @returns {Array} Array of storage objects
+ */
+const getStorageInfo = async (device) => {
+  try {
+    // Get storage index
+    const storageOids = [];
+    for (let i = 1; i <= 10; i++) {  // Assume max 10 storage entries
+      storageOids.push(`1.3.6.1.2.1.25.2.3.1.3.${i}`); // hrStorageDescr
+    }
+    
+    const storageDescrResults = await getSnmpData(device, storageOids);
+    const storageIndices = Object.keys(storageDescrResults).map(oid => {
+      const parts = oid.split('.');
+      return parseInt(parts[parts.length - 1]);
+    });
+    
+    const storage = [];
+    
+    for (const index of storageIndices) {
+      const detailOids = [
+        `1.3.6.1.2.1.25.2.3.1.3.${index}`, // hrStorageDescr
+        `1.3.6.1.2.1.25.2.3.1.4.${index}`, // hrStorageAllocationUnits
+        `1.3.6.1.2.1.25.2.3.1.5.${index}`, // hrStorageSize
+        `1.3.6.1.2.1.25.2.3.1.6.${index}`  // hrStorageUsed
+      ];
+      
+      try {
+        const storageData = await getSnmpData(device, detailOids);
+        
+        const descr = storageData[`1.3.6.1.2.1.25.2.3.1.3.${index}`];
+        const allocationUnits = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.4.${index}`] || 0);
+        const size = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.5.${index}`] || 0);
+        const used = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.6.${index}`] || 0);
+        
+        // Skip non-physical storage
+        if (descr && (descr.includes('Physical') || descr.includes('Fixed') || descr.includes('RAM'))) {
+          const totalBytes = size * allocationUnits;
+          const usedBytes = used * allocationUnits;
+          const freeBytes = totalBytes - usedBytes;
+          const usedPercent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) : 0;
+          
+          storage.push({
+            index,
+            description: descr,
+            sizeBytes: totalBytes,
+            usedBytes,
+            freeBytes,
+            usedPercent,
+            allocationUnits
+          });
+        }
+      } catch (err) {
+        console.error(`Error getting data for storage ${index}:`, err.message);
+      }
+    }
+    
+    return storage;
+  } catch (error) {
+    console.error('Error getting storage info:', error.message);
+    throw error;
+  }
+};
+
 module.exports = {
   MIKROTIK_OIDS,
   createSnmpSession,
@@ -375,5 +496,7 @@ module.exports = {
   getResourceUsage,
   getInterfaceStats,
   getTemperature,
+  getNetworkInterfaces,
+  getStorageInfo,
   testSnmpConnectivity
 };

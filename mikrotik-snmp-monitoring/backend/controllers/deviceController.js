@@ -1,7 +1,7 @@
 const Device = require('../models/Device');
 const MonitoringLog = require('../models/MonitoringLog');
 const { pingHost } = require('../utils/pingUtils');
-const { testSNMP } = require('../utils/snmpUtils');
+const { testSnmpConnectivity, getSnmpData } = require('../utils/snmpExporter');
 const snmpExporterController = require('./snmpExporterController');
 
 // @desc    Ping a device
@@ -455,13 +455,21 @@ const testConnection = async (req, res) => {
 
     // Test SNMP connectivity
     try {
-      results.snmp = await testSNMP(ipAddress, snmpConfig);
+      // Create a temporary device object for SNMP testing
+      const testDevice = {
+        ipAddress: ipAddress,
+        snmpVersion: snmpConfig.version,
+        snmpCommunity: snmpConfig.community,
+        snmpPort: snmpConfig.port,
+        snmpTimeout: snmpConfig.timeout
+      };
+      
+      results.snmp = await testSnmpConnectivity(testDevice);
       
       // If SNMP works, try to get device info
       if (results.snmp.success) {
-        const { getSNMPData } = require('../utils/snmpUtils');
         try {
-          const deviceInfo = await getSNMPData(ipAddress, snmpConfig, [
+          const deviceInfo = await getSnmpData(testDevice, [
             '1.3.6.1.2.1.1.1.0', // sysDescr
             '1.3.6.1.2.1.1.5.0', // sysName
             '1.3.6.1.4.1.14988.1.1.4.4.0' // MikroTik software version

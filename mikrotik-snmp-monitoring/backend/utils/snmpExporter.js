@@ -1,10 +1,52 @@
 /**
  * SNMP Exporter - Collects and exports SNMP metrics in a standardized format
  * Inspired by Prometheus SNMP exporter
+ * 
+ * This file consolidates functionality from both snmpUtils.js and snmpExporter.js
+ * to simplify the codebase and reduce duplication.
+ * 
+ * Features:
+ * - Basic SNMP operations (createSession, get, walk)
+ * - MikroTik-specific data collection (system info, resources, interfaces, storage)
+ * - Scheduled metrics collection with different intervals
+ * - Standardized metrics formatting
  */
 
 const snmp = require('net-snmp');
-const { MIKROTIK_OIDS } = require('./snmpUtils');
+
+// Common SNMP OIDs for MikroTik devices
+const MIKROTIK_OIDS = {
+  // System Information
+  sysDescr: '1.3.6.1.2.1.1.1.0',
+  sysUpTime: '1.3.6.1.2.1.1.3.0',
+  sysName: '1.3.6.1.2.1.1.5.0',
+  sysLocation: '1.3.6.1.2.1.1.6.0',
+  
+  // CPU Usage
+  hrProcessorLoad: '1.3.6.1.2.1.25.3.3.1.2.1',
+  
+  // Memory Usage
+  hrMemorySize: '1.3.6.1.2.1.25.2.2.0',
+  hrStorageUsed: '1.3.6.1.2.1.25.2.3.1.6',
+  hrStorageSize: '1.3.6.1.2.1.25.2.3.1.5',
+  
+  // Interface Statistics
+  ifNumber: '1.3.6.1.2.1.2.1.0',
+  ifDescr: '1.3.6.1.2.1.2.2.1.2',
+  ifInOctets: '1.3.6.1.2.1.2.2.1.10',
+  ifOutOctets: '1.3.6.1.2.1.2.2.1.16',
+  ifInUcastPkts: '1.3.6.1.2.1.2.2.1.11',
+  ifOutUcastPkts: '1.3.6.1.2.1.2.2.1.17',
+  ifInErrors: '1.3.6.1.2.1.2.2.1.14',
+  ifOutErrors: '1.3.6.1.2.1.2.2.1.20',
+  ifOperStatus: '1.3.6.1.2.1.2.2.1.8',
+  
+  // MikroTik Specific
+  mtxrHlTemperature: '1.3.6.1.4.1.14988.1.1.3.10.0',
+  mtxrHlVoltage: '1.3.6.1.4.1.14988.1.1.3.8.0',
+  mtxrHlCurrent: '1.3.6.1.4.1.14988.1.1.3.9.0',
+  mtxrHlProcessorTemperature: '1.3.6.1.4.1.14988.1.1.3.11.0'
+};
 
 // Default collection intervals (in milliseconds)
 const DEFAULT_INTERVALS = {
@@ -601,9 +643,380 @@ const startCollector = (device, callback) => {
   return collectorObj;
 };
 
+/**
+ * Create SNMP session
+ * @param {Object} config - SNMP configuration
+ * @returns {Object} SNMP session
+ */
+const createSnmpSession = (config) => {
+  const options = {
+    port: config.snmpPort || 161,
+    retries: 1,
+    timeout: config.snmpTimeout || 5000,
+    version: snmp.Version2c
+  };
+
+  if (config.snmpVersion === '1') {
+    options.version = snmp.Version1;
+  } else if (config.snmpVersion === '3') {
+    options.version = snmp.Version3;
+  }
+
+  const community = config.snmpCommunity || 'public';
+  return snmp.createSession(config.ipAddress, community, options);
+};
+
+/**
+ * Get SNMP data from device using provided OIDs
+ * @param {Object} device - Device object with SNMP configuration
+ * @param {Array} oids - Array of OIDs to get
+ * @returns {Promise<Object>} - Object with OID keys and values
+ */
+const getSnmpData = async (device, oids) => {
+  return new Promise((resolve, reject) => {
+    const session = createSnmpSession(device);
+    
+    session.get(oids, (error, varbinds) => {
+      session.close();
+      
+      if (error) {
+        console.error(`SNMP Error for ${device.name}: ${error.message}`);
+        return reject(error);
+      }
+      
+      const result = {};
+      
+      for (let i = 0; i < varbinds.length; i++) {
+        if (snmp.isVarbindError(varbinds[i])) {
+          console.error(`SNMP Error for OID ${oids[i]}: ${snmp.varbindError(varbinds[i])}`);
+        } else {
+          let value = varbinds[i].value;
+          
+          // Handle non-serializable data types
+          if (value instanceof Buffer) {
+            value = value.toString();
+          } else if (typeof value === 'bigint') {
+            value = Number(value);
+          }
+          
+          result[oids[i]] = value;
+        }
+      }
+      
+      resolve(result);
+    });
+  });
+};
+
+/**
+ * Get system information from device
+ * @param {Object} device - Device object with SNMP configuration
+ * @returns {Promise<Object>} - System information object
+ */
+const getSystemInfo = async (device) => {
+  const oids = [
+    MIKROTIK_OIDS.sysDescr,
+    MIKROTIK_OIDS.sysUpTime,
+    MIKROTIK_OIDS.sysName,
+    MIKROTIK_OIDS.sysLocation
+  ];
+  
+  try {
+    const result = await getSnmpData(device, oids);
+    
+    // Convert uptime from timeticks (hundredths of a second) to seconds
+    const uptimeTicks = result[MIKROTIK_OIDS.sysUpTime];
+    const uptimeSeconds = uptimeTicks ? Math.floor(uptimeTicks / 100) : 0;
+    
+    return {
+      description: result[MIKROTIK_OIDS.sysDescr] || 'Unknown',
+      uptime: uptimeSeconds,
+      name: result[MIKROTIK_OIDS.sysName] || 'Unknown',
+      location: result[MIKROTIK_OIDS.sysLocation] || 'Unknown'
+    };
+  } catch (error) {
+    console.error(`Failed to get system info for ${device.name}:`, error.message);
+    throw error;
+  }
+};
+
+/**
+ * Get resource usage from device
+ * @param {Object} device - Device object with SNMP configuration
+ * @returns {Promise<Object>} - Resource usage object
+ */
+const getResourceUsage = async (device) => {
+  try {
+    // Get CPU usage
+    const cpuResult = await getSnmpData(device, [MIKROTIK_OIDS.hrProcessorLoad]);
+    const cpuUsage = cpuResult[MIKROTIK_OIDS.hrProcessorLoad] || 0;
+    
+    // Get memory info
+    const memorySize = await getSnmpData(device, [MIKROTIK_OIDS.hrMemorySize]);
+    const totalMemory = memorySize[MIKROTIK_OIDS.hrMemorySize] || 0;
+    
+    // Typically index 1 is physical memory on MikroTik
+    const memoryUsed = await getSnmpData(device, [
+      `${MIKROTIK_OIDS.hrStorageUsed}.1`,
+      `${MIKROTIK_OIDS.hrStorageSize}.1`
+    ]);
+    
+    const usedMem = memoryUsed[`${MIKROTIK_OIDS.hrStorageUsed}.1`] || 0;
+    const totalMem = memoryUsed[`${MIKROTIK_OIDS.hrStorageSize}.1`] || totalMemory;
+    
+    const memoryUsage = totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0;
+    
+    // Get disk usage - typically index 2 on MikroTik
+    const diskUsage = await getSnmpData(device, [
+      `${MIKROTIK_OIDS.hrStorageUsed}.2`,
+      `${MIKROTIK_OIDS.hrStorageSize}.2`
+    ]);
+    
+    const usedDisk = diskUsage[`${MIKROTIK_OIDS.hrStorageUsed}.2`] || 0;
+    const totalDisk = diskUsage[`${MIKROTIK_OIDS.hrStorageSize}.2`] || 1;
+    
+    const diskUsagePercent = totalDisk > 0 ? Math.round((usedDisk / totalDisk) * 100) : 0;
+    
+    return {
+      cpuUsage: parseInt(cpuUsage),
+      memoryUsage: memoryUsage,
+      diskUsage: diskUsagePercent,
+      totalMemory: totalMem,
+      usedMemory: usedMem,
+      totalDisk: totalDisk,
+      usedDisk: usedDisk
+    };
+  } catch (error) {
+    console.error(`Failed to get resource usage for ${device.name}:`, error.message);
+    throw error;
+  }
+};
+
+/**
+ * Get temperature information from device
+ * @param {Object} device - Device object with SNMP configuration
+ * @returns {Promise<Object>} - Temperature information object
+ */
+const getTemperature = async (device) => {
+  const oids = [
+    MIKROTIK_OIDS.mtxrHlTemperature,
+    MIKROTIK_OIDS.mtxrHlProcessorTemperature
+  ];
+  
+  try {
+    const result = await getSnmpData(device, oids);
+    
+    // MikroTik returns temperature in tenths of degrees Celsius
+    const boardTemp = result[MIKROTIK_OIDS.mtxrHlTemperature];
+    const cpuTemp = result[MIKROTIK_OIDS.mtxrHlProcessorTemperature];
+    
+    return {
+      boardTemperature: boardTemp ? (boardTemp / 10).toFixed(1) : null,
+      cpuTemperature: cpuTemp ? (cpuTemp / 10).toFixed(1) : null
+    };
+  } catch (error) {
+    console.error(`Failed to get temperature info for ${device.name}:`, error.message);
+    throw error;
+  }
+};
+
+/**
+ * Get network interfaces information
+ * @param {Object} device - Device object with SNMP configuration
+ * @returns {Promise<Array>} - Array of interface objects
+ */
+const getNetworkInterfaces = async (device) => {
+  try {
+    // First get number of interfaces
+    const ifNumberResult = await getSnmpData(device, [MIKROTIK_OIDS.ifNumber]);
+    const ifNumber = ifNumberResult[MIKROTIK_OIDS.ifNumber];
+    
+    if (!ifNumber) {
+      throw new Error('Could not determine number of interfaces');
+    }
+    
+    console.log(`Device ${device.name} has ${ifNumber} interfaces`);
+    
+    // For each interface, get description, status, and traffic data
+    const interfaces = [];
+    
+    for (let i = 1; i <= ifNumber; i++) {
+      const ifOids = [
+        `${MIKROTIK_OIDS.ifDescr}.${i}`,
+        `${MIKROTIK_OIDS.ifOperStatus}.${i}`,
+        `${MIKROTIK_OIDS.ifInOctets}.${i}`,
+        `${MIKROTIK_OIDS.ifOutOctets}.${i}`,
+        `${MIKROTIK_OIDS.ifInErrors}.${i}`,
+        `${MIKROTIK_OIDS.ifOutErrors}.${i}`
+      ];
+      
+      try {
+        const ifData = await getSnmpData(device, ifOids);
+        
+        interfaces.push({
+          index: i,
+          ifDescr: ifData[`${MIKROTIK_OIDS.ifDescr}.${i}`] || `Interface ${i}`,
+          ifOperStatus: parseInt(ifData[`${MIKROTIK_OIDS.ifOperStatus}.${i}`] || 0),
+          ifInOctets: parseInt(ifData[`${MIKROTIK_OIDS.ifInOctets}.${i}`] || 0),
+          ifOutOctets: parseInt(ifData[`${MIKROTIK_OIDS.ifOutOctets}.${i}`] || 0),
+          ifInErrors: parseInt(ifData[`${MIKROTIK_OIDS.ifInErrors}.${i}`] || 0),
+          ifOutErrors: parseInt(ifData[`${MIKROTIK_OIDS.ifOutErrors}.${i}`] || 0),
+          status: parseInt(ifData[`${MIKROTIK_OIDS.ifOperStatus}.${i}`]) === 1 ? 'up' : 'down'
+        });
+      } catch (err) {
+        console.error(`Error getting data for interface ${i}:`, err.message);
+      }
+    }
+    
+    return interfaces;
+  } catch (error) {
+    console.error('Error getting network interfaces:', error.message);
+    throw error;
+  }
+};
+
+/**
+ * Get storage information
+ * @param {Object} device - Device object with SNMP configuration
+ * @returns {Promise<Array>} - Array of storage objects
+ */
+const getStorageInfo = async (device) => {
+  try {
+    // Get storage index
+    const storageOids = [];
+    for (let i = 1; i <= 10; i++) {  // Assume max 10 storage entries
+      storageOids.push(`1.3.6.1.2.1.25.2.3.1.3.${i}`); // hrStorageDescr
+    }
+    
+    const storageDescrResults = await getSnmpData(device, storageOids);
+    const storageIndices = Object.keys(storageDescrResults).map(oid => {
+      const parts = oid.split('.');
+      return parseInt(parts[parts.length - 1]);
+    });
+    
+    const storage = [];
+    
+    for (const index of storageIndices) {
+      const detailOids = [
+        `1.3.6.1.2.1.25.2.3.1.3.${index}`, // hrStorageDescr
+        `1.3.6.1.2.1.25.2.3.1.4.${index}`, // hrStorageAllocationUnits
+        `1.3.6.1.2.1.25.2.3.1.5.${index}`, // hrStorageSize
+        `1.3.6.1.2.1.25.2.3.1.6.${index}`  // hrStorageUsed
+      ];
+      
+      try {
+        const storageData = await getSnmpData(device, detailOids);
+        
+        const descr = storageData[`1.3.6.1.2.1.25.2.3.1.3.${index}`];
+        const allocationUnits = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.4.${index}`] || 0);
+        const size = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.5.${index}`] || 0);
+        const used = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.6.${index}`] || 0);
+        
+        // Skip non-physical storage
+        if (descr && (descr.includes('Physical') || descr.includes('Fixed') || descr.includes('RAM'))) {
+          const totalBytes = size * allocationUnits;
+          const usedBytes = used * allocationUnits;
+          const freeBytes = totalBytes - usedBytes;
+          const usedPercent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) : 0;
+          
+          storage.push({
+            index,
+            description: descr,
+            sizeBytes: totalBytes,
+            usedBytes,
+            freeBytes,
+            usedPercent,
+            allocationUnits
+          });
+        }
+      } catch (err) {
+        console.error(`Error getting data for storage ${index}:`, err.message);
+      }
+    }
+    
+    return storage;
+  } catch (error) {
+    console.error('Error getting storage info:', error.message);
+    throw error;
+  }
+};
+
+/**
+ * Get interface statistics
+ * @param {Object} device - Device object with SNMP configuration
+ * @param {Number} ifIndex - Interface index
+ * @returns {Promise<Object>} - Interface statistics
+ */
+const getInterfaceStats = async (device, ifIndex) => {
+  const oids = [
+    `${MIKROTIK_OIDS.ifDescr}.${ifIndex}`,
+    `${MIKROTIK_OIDS.ifInOctets}.${ifIndex}`,
+    `${MIKROTIK_OIDS.ifOutOctets}.${ifIndex}`,
+    `${MIKROTIK_OIDS.ifInUcastPkts}.${ifIndex}`,
+    `${MIKROTIK_OIDS.ifOutUcastPkts}.${ifIndex}`,
+    `${MIKROTIK_OIDS.ifInErrors}.${ifIndex}`,
+    `${MIKROTIK_OIDS.ifOutErrors}.${ifIndex}`,
+    `${MIKROTIK_OIDS.ifOperStatus}.${ifIndex}`
+  ];
+  
+  try {
+    const result = await getSnmpData(device, oids);
+    
+    return {
+      description: result[`${MIKROTIK_OIDS.ifDescr}.${ifIndex}`] || `Interface ${ifIndex}`,
+      inOctets: parseInt(result[`${MIKROTIK_OIDS.ifInOctets}.${ifIndex}`] || 0),
+      outOctets: parseInt(result[`${MIKROTIK_OIDS.ifOutOctets}.${ifIndex}`] || 0),
+      inPackets: parseInt(result[`${MIKROTIK_OIDS.ifInUcastPkts}.${ifIndex}`] || 0),
+      outPackets: parseInt(result[`${MIKROTIK_OIDS.ifOutUcastPkts}.${ifIndex}`] || 0),
+      inErrors: parseInt(result[`${MIKROTIK_OIDS.ifInErrors}.${ifIndex}`] || 0),
+      outErrors: parseInt(result[`${MIKROTIK_OIDS.ifOutErrors}.${ifIndex}`] || 0),
+      operStatus: parseInt(result[`${MIKROTIK_OIDS.ifOperStatus}.${ifIndex}`] || 0),
+      status: parseInt(result[`${MIKROTIK_OIDS.ifOperStatus}.${ifIndex}`]) === 1 ? 'up' : 'down'
+    };
+  } catch (error) {
+    console.error(`Failed to get stats for interface ${ifIndex}:`, error.message);
+    throw error;
+  }
+};
+
+/**
+ * Test SNMP connectivity to a device
+ * @param {Object} device - Device object with SNMP configuration
+ * @returns {Promise<Object>} - Test results
+ */
+const testSnmpConnectivity = async (device) => {
+  try {
+    const startTime = Date.now();
+    await getSnmpData(device, [MIKROTIK_OIDS.sysDescr]);
+    const responseTime = Date.now() - startTime;
+    
+    return {
+      success: true,
+      responseTime,
+      message: 'SNMP connectivity successful'
+    };
+  } catch (error) {
+    return {
+      success: false,
+      responseTime: null,
+      message: error.message
+    };
+  }
+};
+
 module.exports = {
+  MIKROTIK_OIDS,
   METRICS,
   DEFAULT_INTERVALS,
+  createSnmpSession,
+  getSnmpData,
+  getSystemInfo,
+  getResourceUsage,
+  getInterfaceStats,
+  getTemperature,
+  getNetworkInterfaces,
+  getStorageInfo,
+  testSnmpConnectivity,
   collectMetrics,
   startCollector
 };

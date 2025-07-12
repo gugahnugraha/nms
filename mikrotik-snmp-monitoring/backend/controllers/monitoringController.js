@@ -6,8 +6,10 @@ const {
   getSystemInfo,
   getResourceUsage,
   getInterfaceStats,
-  getTemperature
-} = require('../utils/snmpUtils');
+  getTemperature,
+  getNetworkInterfaces,
+  getStorageInfo
+} = require('../utils/snmpExporter');
 
 // @desc    Get monitoring dashboard data
 // @route   GET /api/monitoring/dashboard
@@ -725,10 +727,12 @@ const getDeviceRealTimeMetrics = async (req, res) => {
 
     try {
       // Get all metrics at once
-      const [systemInfo, resourceUsage, temperature] = await Promise.all([
+      const [systemInfo, resourceUsage, temperature, networkInterfaces, storageInfo] = await Promise.all([
         getSystemInfo(device).catch(err => ({ error: err.message })),
         getResourceUsage(device).catch(err => ({ error: err.message })),
-        getTemperature(device).catch(err => ({ error: err.message }))
+        getTemperature(device).catch(err => ({ error: err.message })),
+        getNetworkInterfaces(device).catch(err => ({ error: err.message })),
+        getStorageInfo(device).catch(err => ({ error: err.message }))
       ]);
 
       // Create metrics object
@@ -741,7 +745,9 @@ const getDeviceRealTimeMetrics = async (req, res) => {
         responseTime: pingResult.time,
         uptime: systemInfo.uptime,
         systemName: systemInfo.name,
-        systemLocation: systemInfo.location
+        systemLocation: systemInfo.location,
+        interfaces: networkInterfaces && Array.isArray(networkInterfaces) ? networkInterfaces : [],
+        storage: storageInfo && Array.isArray(storageInfo) ? storageInfo : []
       };
 
       // Save this data to the monitoring log

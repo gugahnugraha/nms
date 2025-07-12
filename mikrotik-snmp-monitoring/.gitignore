@@ -30,6 +30,8 @@ yarn-debug.log*
 yarn-error.log*
 /backend/logs
 /frontend/logs
+/backend/utils/snmpUtils.js
+/backend/utils/snmpUtils.js.bak
 
 # IDEs and editors
 /.idea
