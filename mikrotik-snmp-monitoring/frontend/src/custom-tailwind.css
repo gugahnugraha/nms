@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .xs\:inline {
+    @media (min-width: 480px) {
+      display: inline;
+    }
+  }
+}
+
+/* Existing CSS... */
