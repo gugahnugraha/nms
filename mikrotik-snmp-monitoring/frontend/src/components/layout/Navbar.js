@@ -6,13 +6,13 @@ const Navbar = ({ toggleSidebar }) => {
   const { user } = useAuth();
 
   return (
-    <header className="bg-white shadow-sm border-b border-gray-200 h-16">
+    <header className="bg-white shadow-sm border-b border-gray-200 h-16 sticky top-0 z-10">
       <div className="flex items-center justify-between h-full px-6">
         <div className="flex items-center space-x-4">
           {/* Mobile menu button */}
           <button
             onClick={toggleSidebar}
-            className="lg:hidden p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100"
+            className="lg:hidden p-2 rounded-md text-gray-500 hover:text-primary-600 hover:bg-gray-100 transition-colors"
           >
             <Menu className="w-6 h-6" />
           </button>
@@ -25,26 +25,26 @@ const Navbar = ({ toggleSidebar }) => {
             <input
               type="text"
               placeholder="Search devices..."
-              className="block w-80 pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+              className="input pl-10 w-80 text-sm bg-gray-50 focus:bg-white border-gray-300"
             />
           </div>
         </div>
 
         <div className="flex items-center space-x-4">
           {/* Notifications */}
-          <button className="p-2 text-gray-400 hover:text-gray-500 hover:bg-gray-100 rounded-md relative">
+          <button className="p-2 text-gray-500 hover:text-primary-600 hover:bg-gray-100 rounded-md relative transition-colors">
             <Bell className="w-6 h-6" />
-            <span className="absolute top-1 right-1 block h-2 w-2 rounded-full bg-red-400"></span>
+            <span className="absolute top-1.5 right-1.5 block h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white"></span>
           </button>
 
           {/* User menu */}
           <div className="relative">
-            <button className="flex items-center space-x-3 p-2 text-gray-700 hover:bg-gray-100 rounded-md">
-              <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center">
+            <button className="flex items-center space-x-3 p-2 text-gray-700 hover:bg-gray-100 rounded-md transition-colors">
+              <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center shadow-sm">
                 <User className="w-5 h-5 text-primary-600" />
               </div>
               <div className="hidden md:block text-left">
-                <p className="text-sm font-medium text-gray-900">
+                <p className="text-sm font-semibold text-gray-900">
                   {user?.firstName} {user?.lastName}
                 </p>
                 <p className="text-xs text-gray-500">
