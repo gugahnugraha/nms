@@ -28,16 +28,16 @@ export const NotificationProvider = ({ children }) => {
 
     // Check for state changes after initialization
     if (initialized) {
+      const updatedStates = { ...deviceStates };
       dashboardData.devices.forEach(device => {
         const prevStatus = deviceStates[device._id];
-        
         // If this is a new device or status has changed
         if (prevStatus && prevStatus !== device.status) {
           // Status changed, show toast notification
           if (device.status === 'offline') {
             toast.error(
-              `🚨 Device ${device.name} is now offline!`, 
-              { 
+              `🚨 Device ${device.name} is now offline!`,
+              {
                 duration: 5000,
                 icon: '🚨',
                 id: `device-down-${device._id}`
@@ -46,7 +46,7 @@ export const NotificationProvider = ({ children }) => {
           } else if (device.status === 'online' && prevStatus === 'offline') {
             toast.success(
               `✅ Device ${device.name} is back online!`,
-              { 
+              {
                 duration: 5000,
                 icon: '✅',
                 id: `device-up-${device._id}`
@@ -54,15 +54,11 @@ export const NotificationProvider = ({ children }) => {
             );
           }
         }
-        
-        // Update the state
-        setDeviceStates(prev => ({
-          ...prev,
-          [device._id]: device.status
-        }));
+        updatedStates[device._id] = device.status;
       });
+      setDeviceStates(updatedStates);
     }
-  }, [dashboardData, initialized, deviceStates]);
+  }, [dashboardData, initialized]);
 
   // Count current alerts (offline devices)
   const getAlertCount = () => {

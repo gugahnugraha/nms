@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import StatusBadge from '../components/common/StatusBadge';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+
 import ConfirmModal from '../components/common/ConfirmModal';
 import DeviceForm from '../components/devices/DeviceForm';
 import deviceService from '../services/deviceService';
@@ -41,6 +42,7 @@ const DeviceDetail = () => {
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [timeRange, setTimeRange] = useState('24h');
+  const [pollingInterval, setPollingInterval] = useState(30000); // 30 seconds default
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showRealTimeMetrics, setShowRealTimeMetrics] = useState(false);
@@ -53,13 +55,53 @@ const DeviceDetail = () => {
   const [showInterfaceDetails, setShowInterfaceDetails] = useState(false);
   const [interfaceTrafficHistory, setInterfaceTrafficHistory] = useState([]);
   const [trafficLoading, setTrafficLoading] = useState(false);
+  const [interfaceHistory, setInterfaceHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Fetch interface traffic history when selectedInterface changes
+  useEffect(() => {
+    if (!selectedInterface) {
+      setInterfaceTrafficHistory([]);
+      return;
+    }
+    const fetchTrafficHistory = async () => {
+      setTrafficLoading(true);
+      try {
+        // Simulate fetching traffic history data for the selected interface
+        // Replace this with actual API call if available
+        const history = [];
+        const now = new Date();
+        for (let i = 0; i < 24; i++) {
+          history.unshift({
+            time: new Date(now.getTime() - i * 60 * 60 * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            inTraffic: Math.random() * 100,
+            outTraffic: Math.random() * 100
+          });
+        }
+        setInterfaceTrafficHistory(history);
+      } catch (error) {
+        toast.error('Failed to load interface traffic history');
+      } finally {
+        setTrafficLoading(false);
+      }
+    };
+    fetchTrafficHistory();
+  }, [selectedInterface]);
 
   const timeRangeOptions = [
     { value: '1h', label: 'Last Hour' },
     { value: '6h', label: 'Last 6 Hours' },
     { value: '24h', label: 'Last 24 Hours' },
     { value: '7d', label: 'Last 7 Days' },
-    { value: '30d', label: 'Last 30 Days' }  ];
+    { value: '30d', label: 'Last 30 Days' }
+  ];
+
+  const pollingIntervalOptions = [
+    { value: 10000, label: '10 seconds' },
+    { value: 30000, label: '30 seconds' },
+    { value: 60000, label: '1 minute' },
+    { value: 300000, label: '5 minutes' }
+  ];
 
   const fetchDeviceData = async () => {
     try {
@@ -68,8 +110,9 @@ const DeviceDetail = () => {
       setDevice(deviceData);
       setError(null);
     } catch (error) {
-      setError(error.message);
-      toast.error('Failed to load device data');
+      const message = error.response?.data?.message || error.message || 'Failed to load device data';
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -95,19 +138,45 @@ const DeviceDetail = () => {
         console.log('First metric:', metricsData[0]);
         console.log('Last metric:', metricsData[metricsData.length - 1]);
         setMetrics(metricsData);
+        setRecentLogs(Array.isArray(logsData.logs) ? logsData.logs : []);
+        return metricsData; // <-- return the data
       } else {
         console.warn('No metrics data received or data is empty');
         // If no historical metrics, try to get real-time metrics
-        await fetchRealTimeMetrics();
+        try {
+          await fetchRealTimeMetrics();
+        } catch (rtError) {
+          console.error('Failed to fetch real-time metrics:', rtError);
+          toast.error('Failed to load any metrics data');
+          setMetrics([]);
+        }
+        setRecentLogs(Array.isArray(logsData.logs) ? logsData.logs : []);
+        return []; // <-- return empty array
       }
-      
-      setRecentLogs(Array.isArray(logsData.logs) ? logsData.logs : []);
     } catch (error) {
-      console.error('Failed to fetch metrics:', error);
-      toast.error('Failed to load metrics data');
+      console.error('Error fetching metrics:', {
+        message: error.message,
+        stack: error.stack,
+        response: error.response?.data,
+        config: error.config,
+      });
+      toast.error(`Failed to load metrics data: ${error.message}`);
       
       // If regular metrics failed, try real-time metrics
-      await fetchRealTimeMetrics();
+      try {
+        await fetchRealTimeMetrics();
+      } catch (rtError) {
+        console.error('Error fetching real-time metrics after initial failure:', {
+          message: rtError.message,
+          stack: rtError.stack,
+          response: rtError.response?.data,
+          config: rtError.config,
+        });
+        toast.error('Failed to load any metrics data');
+        setMetrics([]);
+      }
+      setMetricsLoading(false);
+      return []; // <-- return empty array on error
     } finally {
       setMetricsLoading(false);
     }
@@ -118,61 +187,112 @@ const DeviceDetail = () => {
       console.log('Fetching real-time metrics for device:', id);
       const response = await monitoringService.getRealTimeMetrics(id);
       
-      if (response.success && response.data) {
-        console.log('Received real-time metrics:', response.data);
-        
-        // Convert the single metric into an array format for the charts
-        const fakeTimestamp = new Date();
-        fakeTimestamp.setMinutes(fakeTimestamp.getMinutes() - 5);
-        
-        const realTimeMetrics = [
-          {
-            timestamp: fakeTimestamp,
-            cpuUsage: response.data.cpuUsage,
-            memoryUsage: response.data.memoryUsage,
-            diskUsage: response.data.diskUsage,
-            responseTime: response.data.responseTime
-          },
-          {
-            timestamp: response.data.timestamp,
-            cpuUsage: response.data.cpuUsage,
-            memoryUsage: response.data.memoryUsage,
-            diskUsage: response.data.diskUsage,
-            responseTime: response.data.responseTime
-          }
-        ];
-        
-        setMetrics(realTimeMetrics);
-        toast.success('Real-time metrics loaded');
-      } else {
-        console.warn('No real-time metrics data received');
+      if (!response || !response.success) {
+        throw new Error(response?.message || 'Failed to get real-time metrics');
       }
+
+      if (!response.data) {
+        throw new Error('No metrics data received from the server');
+      }
+      
+      console.log('Received real-time metrics:', response.data);
+      
+      // Validate required metrics
+      const requiredMetrics = ['cpuUsage', 'memoryUsage', 'diskUsage', 'responseTime'];
+      const missingMetrics = requiredMetrics.filter(metric => 
+        response.data[metric] === undefined || response.data[metric] === null
+      );
+      
+      if (missingMetrics.length > 0) {
+        console.warn('Missing metrics:', missingMetrics);
+        toast.warning(`Some metrics are unavailable: ${missingMetrics.join(', ')}`);
+      }
+      
+      // Convert the single metric into an array format for the charts
+      const fakeTimestamp = new Date();
+      fakeTimestamp.setMinutes(fakeTimestamp.getMinutes() - 5);
+      
+      const realTimeMetrics = [
+        {
+          timestamp: fakeTimestamp,
+          cpuUsage: response.data.cpuUsage ?? 0,
+          memoryUsage: response.data.memoryUsage ?? 0,
+          diskUsage: response.data.diskUsage ?? 0,
+          responseTime: response.data.responseTime ?? 0
+        },
+        {
+          timestamp: response.data.timestamp || new Date(),
+          cpuUsage: response.data.cpuUsage ?? 0,
+          memoryUsage: response.data.memoryUsage ?? 0,
+          diskUsage: response.data.diskUsage ?? 0,
+          responseTime: response.data.responseTime ?? 0
+        }
+      ];
+      
+      setMetrics(realTimeMetrics);
+      toast.success('Real-time metrics loaded');
     } catch (error) {
-      console.error('Failed to fetch real-time metrics:', error);
-      toast.error('Failed to load real-time metrics');
+      console.error('Error fetching real-time metrics:', {
+        message: error.message,
+        stack: error.stack,
+        response: error.response?.data,
+        config: error.config,
+      });
+      toast.error(`Failed to load real-time metrics: ${error.message}`);
+      throw error; // Re-throw for the caller to handle
     }
   };
   useEffect(() => {
     fetchDeviceData();
-  }, [id]); // Only depend on id, not fetchDeviceData
+  }, [id]);
 
   useEffect(() => {
-    if (device) {
-      const loadMetrics = async () => {
-        await fetchMetrics();
-        
-        // If no metrics were loaded, try real-time metrics
-        if (!metrics || metrics.length === 0) {
+    let isSubscribed = true;
+    let pollingTimer = null;
+
+    const loadMetrics = async () => {
+      if (!isSubscribed || !id) return; // Use id instead of device
+
+      try {
+        const fetchedMetrics = await fetchMetrics();
+        // Only fetch real-time metrics if no historical metrics returned
+        if (!fetchedMetrics || fetchedMetrics.length === 0) {
           await fetchRealTimeMetrics();
         }
 
-        // Get collector status
-        fetchCollectorStatus();
-      };
-      
-      loadMetrics();
+        await fetchCollectorStatus();
+
+        // Schedule next poll if component is still mounted
+        if (isSubscribed) {
+          pollingTimer = setTimeout(loadMetrics, pollingInterval);
+        }
+      } catch (error) {
+        console.error('Polling cycle failed:', error);
+        // On error, retry after double the normal interval but cap max interval
+        if (isSubscribed) {
+          const retryInterval = Math.min(pollingInterval * 2, 300000); // max 5 minutes
+          pollingTimer = setTimeout(loadMetrics, retryInterval);
+        }
+      }
+    };
+
+    // Cancel any existing timer before starting a new one
+    if (pollingTimer) {
+      clearTimeout(pollingTimer);
     }
-  }, [device, timeRange]); // Remove fetchMetrics dependency
+
+    // Start initial fetch
+    loadMetrics();
+
+    // Cleanup function
+    return () => {
+      console.log('Cleaning up polling timer...');
+      isSubscribed = false;
+      if (pollingTimer) {
+        clearTimeout(pollingTimer);
+      }
+    };
+  }, [id, timeRange, pollingInterval]); // Remove device from dependencies
 
   // Fetch collector status
   const fetchCollectorStatus = async () => {
@@ -231,13 +351,13 @@ const DeviceDetail = () => {
     }
   };
 
-  // Get real-time metrics using SNMP Exporter
+  // Get real-time metrics using Monitoring Service
   const handleGetDetailedMetrics = async () => {
     try {
       setShowRealTimeMetrics(true);
       setCollectorLoading(true);
       
-      const response = await snmpExporterService.getLatestMetrics(id);
+      const response = await monitoringService.getRealTimeMetrics(id);
       
       if (response.success) {
         setRealTimeMetrics(response.data);
@@ -370,8 +490,8 @@ const DeviceDetail = () => {
       time.setHours(time.getHours() - i);
       
       // Base values from current metrics with some randomness
-      const baseInTraffic = iface.ifInOctets ? (iface.ifInOctets / 1024) : 100;
-      const baseOutTraffic = iface.ifOutOctets ? (iface.ifOutOctets / 1024) : 50;
+      const baseInTraffic = iface.ifInOctets ? (iface.ifInOctets / 1024 / 1024) : 0.1;
+      const baseOutTraffic = iface.ifOutOctets ? (iface.ifOutOctets / 1024 / 1024) : 0.05;
       
       // Add randomness for variation (between 0.5x and 1.5x of base value)
       const randomFactorIn = 0.5 + Math.random();
@@ -379,8 +499,8 @@ const DeviceDetail = () => {
       
       data.push({
         time: time.toLocaleTimeString(),
-        inTraffic: Math.round(baseInTraffic * randomFactorIn * 100) / 100,
-        outTraffic: Math.round(baseOutTraffic * randomFactorOut * 100) / 100,
+        inTraffic: +(baseInTraffic * randomFactorIn).toFixed(2),
+        outTraffic: +(baseOutTraffic * randomFactorOut).toFixed(2),
       });
     }
     
@@ -399,10 +519,76 @@ const DeviceDetail = () => {
     }
   }, [selectedInterface]);
 
+  const [selectedInterfaceIndex, setSelectedInterfaceIndex] = useState(0);
+
+  // Fetch interface history from metrics-history endpoint
+  const fetchInterfaceHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await monitoringService.getDeviceMetricsHistory(id, timeRange);
+      // Ambil data interface dari setiap log
+      const history = res.data.map(log => ({
+        timestamp: log.timestamp,
+        interfaces: log.metrics?.interfaces || []
+      }));
+      setInterfaceHistory(history);
+    } catch (err) {
+      toast.error('Failed to load interface history');
+      setInterfaceHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (id) fetchInterfaceHistory();
+  }, [id, timeRange]);
+
+  {/* Interface Traffic History Section */}
+  {showInterfaceDetails && selectedInterface && (
+    <div className="mt-6 p-4 border rounded shadow bg-white">
+      <h3 className="text-lg font-semibold mb-2">Interface Traffic History - {selectedInterface.ifDescr || selectedInterface.name}</h3>
+      {trafficLoading ? (
+        <div>Loading traffic data...</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={interfaceTrafficHistory} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="time" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Line type="monotone" dataKey="inTraffic" stroke="#8884d8" name="Inbound Traffic (MB)" />
+            <Line type="monotone" dataKey="outTraffic" stroke="#82ca9d" name="Outbound Traffic (MB)" />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+      <button
+        className="mt-3 px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
+        onClick={() => setShowInterfaceDetails(false)}
+      >
+        Close
+      </button>
+    </div>
+  )}
+
+  const chartData = React.useMemo(() => {
+    if (!metrics || metrics.length === 0) {
+      return null;
+    }
+    return formatMetricsData(metrics);
+  }, [metrics]);
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-96">
-        <LoadingSpinner size="large" />
+      <div className="p-6">
+        <div className="animate-pulse space-y-4">
+          <div className="h-6 bg-gray-300 rounded w-1/3"></div>
+          <div className="h-4 bg-gray-300 rounded w-1/2"></div>
+          <div className="h-48 bg-gray-300 rounded"></div>
+          <div className="h-6 bg-gray-300 rounded w-full"></div>
+          <div className="h-6 bg-gray-300 rounded w-full"></div>
+        </div>
       </div>
     );
   }
@@ -441,8 +627,6 @@ const DeviceDetail = () => {
     );
   }
 
-  const chartData = formatMetricsData(metrics);
-
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -458,17 +642,37 @@ const DeviceDetail = () => {
         </div>
         
         <div className="flex items-center space-x-3">
-          <select
-            value={timeRange}
-            onChange={(e) => setTimeRange(e.target.value)}
-            className="input text-sm"
-          >
-            {timeRangeOptions.map(option => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2">
+              <label className="text-sm font-medium text-gray-600">Time Range:</label>
+              <select
+                value={timeRange}
+                onChange={(e) => setTimeRange(e.target.value)}
+                className="input text-sm"
+              >
+                {timeRangeOptions.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <label className="text-sm font-medium text-gray-600">Refresh Rate:</label>
+              <select
+                value={pollingInterval}
+                onChange={(e) => setPollingInterval(Number(e.target.value))}
+                className="input text-sm"
+              >
+                {pollingIntervalOptions.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           
           <button
             onClick={handleRefresh}
@@ -655,7 +859,7 @@ const DeviceDetail = () => {
                   <div>
                     <p className="text-sm text-gray-600">Response Time</p>
                     <p className="text-2xl font-bold text-purple-600">
-                      {getLastMetric('responseTime')}ms
+                      {parseFloat(getLastMetric('responseTime')).toFixed(2)}ms
                     </p>
                   </div>
                   <div className="p-2 bg-purple-100 rounded-lg">
@@ -794,8 +998,8 @@ const DeviceDetail = () => {
                   <BarChart
                     data={realTimeMetrics.metrics.interfaces.map(iface => ({
                       name: iface.ifDescr || `Interface ${iface.index}`,
-                      inTraffic: iface.ifInOctets ? Number((iface.ifInOctets / 1024).toFixed(2)) : 0,
-                      outTraffic: iface.ifOutOctets ? Number((iface.ifOutOctets / 1024).toFixed(2)) : 0,
+                      inTraffic: iface.ifInOctets ? Number((iface.ifInOctets / 1024 / 1024).toFixed(2)) : 0,
+                      outTraffic: iface.ifOutOctets ? Number((iface.ifOutOctets / 1024 / 1024).toFixed(2)) : 0,
                     }))}
                     margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
                   >
@@ -808,8 +1012,8 @@ const DeviceDetail = () => {
                       interval={0}
                       tick={{fontSize: 12}}
                     />
-                    <YAxis label={{ value: 'Traffic (KB)', angle: -90, position: 'insideLeft' }} />
-                    <Tooltip formatter={(value) => [`${value} KB`, '']} />
+                    <YAxis label={{ value: 'Traffic (MB)', angle: -90, position: 'insideLeft' }} />
+                    <Tooltip formatter={(value) => [`${value} MB`, '']} />
                     <Legend verticalAlign="top" height={36} />
                     <Bar dataKey="inTraffic" name="Incoming Traffic" fill="#4F46E5" />
                     <Bar dataKey="outTraffic" name="Outgoing Traffic" fill="#10B981" />
@@ -867,14 +1071,14 @@ const DeviceDetail = () => {
                           <div className="flex justify-between">
                             <span className="text-gray-500">In:</span>
                             <span className="font-medium">
-                              {iface.ifInOctets ? `${(iface.ifInOctets / 1024).toFixed(2)} KB` : 'N/A'}
+                              {iface.ifInOctets ? `${(iface.ifInOctets / 1024 / 1024).toFixed(2)} MB` : 'N/A'}
                               {bandwidthPercentIn ? ` (${bandwidthPercentIn.toFixed(2)}%)` : ''}
                             </span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-gray-500">Out:</span>
                             <span className="font-medium">
-                              {iface.ifOutOctets ? `${(iface.ifOutOctets / 1024).toFixed(2)} KB` : 'N/A'}
+                              {iface.ifOutOctets ? `${(iface.ifOutOctets / 1024 / 1024).toFixed(2)} MB` : 'N/A'}
                               {bandwidthPercentOut ? ` (${bandwidthPercentOut.toFixed(2)}%)` : ''}
                             </span>
                           </div>
@@ -919,11 +1123,8 @@ const DeviceDetail = () => {
             <h3 className="text-lg font-semibold text-gray-900">System Resources</h3>
           </div>
           
-          {metricsLoading || !realTimeMetrics ? (
-            <div className="flex items-center justify-center h-64">
-              <LoadingSpinner />
-            </div>
-          ) : realTimeMetrics && realTimeMetrics.metrics && realTimeMetrics.metrics.storage && realTimeMetrics.metrics.storage.length > 0 ? (
+        
+          {realTimeMetrics && realTimeMetrics.metrics && realTimeMetrics.metrics.storage && realTimeMetrics.metrics.storage.length > 0 && (
             <div className="space-y-6">
               {/* Storage Usage Graph */}
               <div>
@@ -996,19 +1197,6 @@ const DeviceDetail = () => {
                 </div>
               )}
             </div>
-          ) : (
-            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4">
-              <div className="flex">
-                <div className="flex-shrink-0">
-                  <Info className="h-5 w-5 text-yellow-400" />
-                </div>
-                <div className="ml-3">
-                  <p className="text-sm text-yellow-700">
-                    System resource data is not available. Click "Get Detailed Metrics" in the device information panel to load system information.
-                  </p>
-                </div>
-              </div>
-            </div>
           )}
         </div>
       </div>
@@ -1021,7 +1209,7 @@ const DeviceDetail = () => {
             <div className="flex items-center justify-center h-64">
               <LoadingSpinner />
             </div>
-          ) : recentLogs.length > 0 ? (
+          ) : Array.isArray(recentLogs) && recentLogs.length > 0 ? (
             <div className="space-y-4">
               {recentLogs.map((log) => (
                 <div key={log.id} className="p-4 bg-gray-50 rounded-lg shadow-sm">
@@ -1259,12 +1447,12 @@ const DeviceDetail = () => {
                             </td>
                             <td className="py-2 px-3 text-sm text-right">
                               {iface.ifInOctets 
-                                ? `${(iface.ifInOctets / 1024).toFixed(2)} KB` 
+                                ? `${(iface.ifInOctets / 1024 / 1024).toFixed(2)} MB` 
                                 : 'N/A'}
                             </td>
                             <td className="py-2 px-3 text-sm text-right">
                               {iface.ifOutOctets 
-                                ? `${(iface.ifOutOctets / 1024).toFixed(2)} KB` 
+                                ? `${(iface.ifOutOctets / 1024 / 1024).toFixed(2)} MB` 
                                 : 'N/A'}
                             </td>
                             <td className="py-2 px-3 text-sm text-right">
@@ -1380,7 +1568,7 @@ const DeviceDetail = () => {
                         <dt className="text-gray-500">Incoming Traffic:</dt>
                         <dd className="font-medium">
                           {selectedInterface.ifInOctets 
-                            ? `${(selectedInterface.ifInOctets / 1024).toFixed(2)} KB` 
+                            ? `${(selectedInterface.ifInOctets / 1024 / 1024).toFixed(2)} MB` 
                             : 'N/A'}
                         </dd>
                       </div>
@@ -1388,7 +1576,7 @@ const DeviceDetail = () => {
                         <dt className="text-gray-500">Outgoing Traffic:</dt>
                         <dd className="font-medium">
                           {selectedInterface.ifOutOctets 
-                            ? `${(selectedInterface.ifOutOctets / 1024).toFixed(2)} KB` 
+                            ? `${(selectedInterface.ifOutOctets / 1024 / 1024).toFixed(2)} MB` 
                             : 'N/A'}
                         </dd>
                       </div>
@@ -1561,8 +1749,8 @@ const DeviceDetail = () => {
                       >
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="time" />
-                        <YAxis label={{ value: 'Traffic (KB)', angle: -90, position: 'insideLeft' }} />
-                        <Tooltip formatter={(value) => [`${value} KB`, '']} />
+                        <YAxis label={{ value: 'Traffic (MB)', angle: -90, position: 'insideLeft' }} />
+                        <Tooltip formatter={(value) => [`${value} MB`, '']} />
                         <Legend />
                         <Line 
                           type="monotone" 
@@ -1604,8 +1792,64 @@ const DeviceDetail = () => {
           </div>
         </div>
       )}
+
+      {/* Interface Traffic History Section */}
+      <div className="card">
+        <div className="card-body">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Interface Traffic History</h3>
+          {historyLoading ? (
+            <div className="flex items-center justify-center h-32">
+              <LoadingSpinner />
+            </div>
+          ) : Array.isArray(interfaceHistory) && interfaceHistory.length > 0 && Array.isArray(interfaceHistory[0].interfaces) && interfaceHistory[0].interfaces.length > 0 ? (
+            <>
+              <div className="mb-4">
+                <label className="mr-2 font-medium">Select Interface:</label>
+                <select
+                  className="input"
+                  onChange={e => setSelectedInterfaceIndex(Number(e.target.value))}
+                  value={selectedInterfaceIndex}
+                >
+                  {interfaceHistory[0].interfaces.map((iface, idx) => (
+                    <option key={idx} value={idx}>
+                      {iface.ifDescr || iface.name || `Interface ${iface.index || idx + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <ResponsiveContainer width="100%" height={250}>
+                <LineChart
+                  data={interfaceHistory.map(log => {
+                    const iface = log.interfaces[selectedInterfaceIndex] || {};
+                    return {
+                      time: new Date(log.timestamp).toLocaleTimeString(),
+                      inTraffic: iface.inTraffic || iface.ifInOctets || 0,
+                      outTraffic: iface.outTraffic || iface.ifOutOctets || 0
+                    };
+                  })}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="time" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="inTraffic" stroke="#8884d8" name="Inbound Traffic" />
+                  <Line type="monotone" dataKey="outTraffic" stroke="#82ca9d" name="Outbound Traffic" />
+                </LineChart>
+              </ResponsiveContainer>
+            </>
+          ) : (
+            <div className="text-center text-gray-500 py-6">
+              No interface history data available
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
+
+
+
 
 export default DeviceDetail;

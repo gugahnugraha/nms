@@ -1,18 +1,20 @@
 /**
  * SNMP Exporter - Collects and exports SNMP metrics in a standardized format
- * Inspired by Prometheus SNMP exporter
+ * Inspired by Prometheus SNMP exporter but adapted for MERN application
  * 
- * This file consolidates functionality from both snmpUtils.js and snmpExporter.js
- * to simplify the codebase and reduce duplication.
+ * Enhanced implementation for integration with React frontend and MongoDB
  * 
  * Features:
  * - Basic SNMP operations (createSession, get, walk)
  * - MikroTik-specific data collection (system info, resources, interfaces, storage)
- * - Scheduled metrics collection with different intervals
- * - Standardized metrics formatting
+ * - Scheduled metrics collection with configurable intervals
+ * - Real-time metrics for frontend dashboards
+ * - Performance optimized for React integration
  */
 
 const snmp = require('net-snmp');
+const EventEmitter = require('events');
+const { pingHost } = require('./pingUtils');
 
 // Common SNMP OIDs for MikroTik devices
 const MIKROTIK_OIDS = {
@@ -266,10 +268,22 @@ const createSession = (device) => {
       version: device.snmpVersion === '1' ? snmp.Version1 : snmp.Version2c
     };
     
-    return snmp.createSession(device.ipAddress, device.snmpCommunity, options);
+    const session = snmp.createSession(device.ipAddress, device.snmpCommunity, options);
+    
+    // Test session connectivity immediately
+    return new Promise((resolve, reject) => {
+      session.get([MIKROTIK_OIDS.sysDescr], (error) => {
+        if (error) {
+          session.close();
+          reject(new Error(`SNMP session test failed: ${error.message}`));
+        } else {
+          resolve(session);
+        }
+      });
+    });
   } catch (error) {
     console.error(`Error creating SNMP session for ${device.name}: ${error.message}`);
-    throw error;
+    throw new Error(`Failed to initialize SNMP session: ${error.message}`);
   }
 };
 
@@ -300,21 +314,20 @@ const collectScalarMetrics = async (session, metrics) => {
         } else {
           let value = vb.value;
           
-          // Apply processing function if specified
+          // Handle Buffer and BigInt types
+          if (value instanceof Buffer) {
+            value = value.toString();
+          } else if (typeof value === 'bigint') {
+            value = Number(value);
+          }
+          
+          // Apply processing function if defined
           if (metric.process && typeof metric.process === 'function') {
             try {
               value = metric.process(value);
-            } catch (e) {
-              console.error(`Error processing ${metric.name}: ${e.message}`);
-              value = null;
+            } catch (err) {
+              console.error(`Error processing ${metric.name}: ${err.message}`);
             }
-          }
-          
-          // Handle non-serializable data types
-          if (value instanceof Buffer) {
-            value = value.toString('hex');
-          } else if (typeof value === 'bigint') {
-            value = Number(value);
           }
           
           result[metric.name] = value;
@@ -327,18 +340,15 @@ const collectScalarMetrics = async (session, metrics) => {
 };
 
 /**
- * Collects table metrics from a device
+ * Collect SNMP walk data (tables)
  * @param {Object} session - SNMP session
- * @param {Object} tableConfig - Table configuration
- * @returns {Promise<Array>} - Collected table rows
+ * @param {String} baseOid - Base OID for table
+ * @returns {Promise<Object>} - Collected table data
  */
-const collectTableMetrics = async (session, tableConfig) => {
+const collectTableData = async (session, baseOid) => {
   return new Promise((resolve, reject) => {
-    const baseOid = tableConfig.baseOid;
-    const tableData = [];
-    const rowsByIndex = {};
+    const results = {};
     
-    // Walk the table
     session.subtree(baseOid, (varbinds) => {
       for (const vb of varbinds) {
         if (snmp.isVarbindError(vb)) {
@@ -346,89 +356,85 @@ const collectTableMetrics = async (session, tableConfig) => {
           continue;
         }
         
-        // Parse OID to get the column and index
-        const oidParts = vb.oid.split('.');
-        const column = parseInt(oidParts[oidParts.length - 2]);
-        const index = oidParts[oidParts.length - 1];
+        let value = vb.value;
         
-        // Initialize row if it doesn't exist
-        if (!rowsByIndex[index]) {
-          rowsByIndex[index] = { index };
+        // Handle Buffer and BigInt types
+        if (value instanceof Buffer) {
+          value = value.toString();
+        } else if (typeof value === 'bigint') {
+          value = Number(value);
         }
         
-        // Find the corresponding column definition
-        const columnDef = tableConfig.columns.find(col => col.column === column);
-        if (columnDef) {
-          let value = vb.value;
-          
-          // Apply processing function if specified
-          if (columnDef.process && typeof columnDef.process === 'function') {
-            try {
-              value = columnDef.process(value);
-            } catch (e) {
-              console.error(`Error processing ${columnDef.name} for index ${index}: ${e.message}`);
-              value = null;
-            }
-          }
-          
-          // Handle non-serializable data types
-          if (value instanceof Buffer) {
-            value = value.toString('hex');
-          } else if (typeof value === 'bigint') {
-            value = Number(value);
-          }
-          
-          rowsByIndex[index][columnDef.name] = value;
-        }
+        results[vb.oid] = value;
       }
     }, (error) => {
       if (error) {
         reject(error);
-        return;
+      } else {
+        resolve(results);
       }
-      
-      // Convert object to array and apply filters and calculations
-      for (const index in rowsByIndex) {
-        const row = rowsByIndex[index];
-        
-        // Apply calculations
-        if (tableConfig.calculate && typeof tableConfig.calculate === 'function') {
-          try {
-            tableConfig.calculate(row);
-          } catch (e) {
-            console.error(`Error calculating values for index ${index}: ${e.message}`);
-          }
-        }
-        
-        // Apply filter if specified
-        try {
-          if (!tableConfig.filter || tableConfig.filter(row)) {
-            tableData.push(row);
-          }
-        } catch (error) {
-          console.error(`Error applying filter for row ${index}: ${error.message}`);
-          // Include the row anyway in case of filter error
-          tableData.push(row);
-        }
-      }
-
-      // Sort table data by index to ensure consistent order
-      tableData.sort((a, b) => a.index - b.index);
-      
-      resolve(tableData);
     });
   });
 };
 
 /**
- * Collects all metrics from a device
- * @param {Object} device - Device configuration
- * @param {Array} metricGroups - Metric groups to collect
+ * Process a collected SNMP table into rows
+ * @param {Object} tableData - Raw table data from collectTableData
+ * @param {Object} tableConfig - Table configuration
+ * @returns {Array} - Processed table rows
+ */
+const processTableData = (tableData, tableConfig) => {
+  const { baseOid, indexColumn, columns } = tableConfig;
+  const indices = new Set();
+  const baseRegex = new RegExp(`^${baseOid.replace(/\./g, '\\.')}\\.${indexColumn}\\.([0-9]+)$`);
+  
+  // Extract all indices from the data
+  for (const oid in tableData) {
+    const match = oid.match(baseRegex);
+    if (match) {
+      indices.add(match[1]);
+    }
+  }
+  
+  // Process each row
+  const rows = [];
+  for (const index of indices) {
+    const row = { index: parseInt(index) };
+    
+    for (const column of columns) {
+      const oid = `${baseOid}.${column.column}.${index}`;
+      if (oid in tableData) {
+        row[column.name] = tableData[oid];
+      }
+    }
+    
+    // Apply calculation function if defined
+    if (tableConfig.calculate && typeof tableConfig.calculate === 'function') {
+      try {
+        tableConfig.calculate(row);
+      } catch (err) {
+        console.error(`Error calculating row ${index}: ${err.message}`);
+      }
+    }
+    
+    // Apply filter function if defined
+    if (!tableConfig.filter || 
+        (tableConfig.filter && typeof tableConfig.filter === 'function' && tableConfig.filter(row))) {
+      rows.push(row);
+    }
+  }
+  
+  return rows;
+};
+
+/**
+ * Collect metrics from a device
+ * @param {Object} device - Device object
+ * @param {Array} metricGroups - Groups of metrics to collect
  * @returns {Promise<Object>} - Collected metrics
  */
-const collectMetrics = async (device, metricGroups = Object.keys(METRICS)) => {
+const collectMetrics = async (device, session, metricGroups = Object.keys(METRICS)) => {
   console.log(`Collecting metrics for device ${device.name} (${device.ipAddress})`);
-  const session = createSession(device);
   const result = {
     deviceId: device._id,
     deviceName: device.name,
@@ -442,11 +448,21 @@ const collectMetrics = async (device, metricGroups = Object.keys(METRICS)) => {
       temperature: null,
       uptime: null,
       status: 'ok',
-      errors: []
-    }
+      errors: [],
+      unsupportedMetrics: [],
+      unsupportedOids: []
+    },
+    responseTime: 0
   };
   
+  const startTime = Date.now();
+  
   try {
+    const errors = [];
+    const unsupportedMetrics = [];
+    const metricResults = {};
+    const startTime = Date.now();
+
     // Process each metric group
     for (const groupName of metricGroups) {
       const group = METRICS[groupName];
@@ -456,256 +472,109 @@ const collectMetrics = async (device, metricGroups = Object.keys(METRICS)) => {
         continue;
       }
       
-      console.log(`Collecting ${groupName} metrics for ${device.name}`);
-      
-      if (group.isTable) {
-        // Table metrics
-        try {
-          const tableData = await collectTableMetrics(session, group);
-          result.metrics[groupName] = tableData;
-        } catch (error) {
-          console.error(`Error collecting ${groupName} table metrics: ${error.message}`);
-          result.metrics[groupName] = [];
-          result.summary.errors.push(`Failed to collect ${groupName} metrics: ${error.message}`);
-          result.summary.status = 'partial';
-        }
-      } else {
-        // Scalar metrics
-        try {
-          const scalarData = await collectScalarMetrics(session, group.metrics);
-          result.metrics[groupName] = scalarData;
-        } catch (error) {
-          console.error(`Error collecting ${groupName} scalar metrics: ${error.message}`);
-          result.metrics[groupName] = {};
-          result.summary.errors.push(`Failed to collect ${groupName} metrics: ${error.message}`);
-          result.summary.status = 'partial';
-        }
-      }
-    }
-    
-    // Process the results to create a simplified view
-    // Update summary values based on collected metrics
-    result.summary.cpuUsage = result.metrics.resources?.cpuUsage ?? null;
-    result.summary.temperature = result.metrics.temperature?.boardTemperature ?? 
-                                result.metrics.temperature?.cpuTemperature ?? null;
-    result.summary.uptime = result.metrics.system?.sysUpTime ?? null;
-    
-    // Calculate memory usage if we have both memorySize and storage table
-    if (result.metrics.resources && result.metrics.resources.memorySize) {
       try {
-        // First check if storage metrics exist
-        if (!result.metrics.storage || !Array.isArray(result.metrics.storage) || result.metrics.storage.length === 0) {
-          console.log(`No storage metrics found for device ${device.name}`);
+        if (group.isTable) {
+          // Collect table data
+          const tableData = await collectTableData(session, group.baseOid);
+          const rows = processTableData(tableData, group);
+          result.metrics[groupName] = rows;
+          
+          // Update summary data based on the group
+          if (groupName === 'storage' && rows.length > 0) {
+            // Use the first storage with highest usage for summary
+            const diskUsage = Math.max(...rows.map(row => row.storageUsagePercent || 0));
+            result.summary.diskUsage = Math.round(diskUsage);
+          }
         } else {
-          // Safely find memory storage
-          const memoryStorage = result.metrics.storage.find(storage => {
-            // Extra safety checks
-            if (!storage) return false;
-            if (!storage.storageDescr) return false;
-            if (typeof storage.storageDescr !== 'string') {
-              console.log(`Non-string storageDescr found: ${typeof storage.storageDescr}`);
-              return false;
+          // Collect scalar metrics
+          const metrics = await collectScalarMetrics(session, group.metrics);
+          result.metrics[groupName] = metrics;
+          
+          // Update summary data based on the group
+          if (groupName === 'system') {
+            result.summary.uptime = metrics.sysUpTime || null;
+            if (!metrics.sysUpTime) {
+              result.summary.unsupportedMetrics.push('uptime');
             }
-            
-            const lowerDesc = storage.storageDescr.toLowerCase();
-            return lowerDesc.includes('memory') || lowerDesc.includes('ram');
-          });
-          
-          if (memoryStorage && typeof memoryStorage.storageUsagePercent === 'number') {
-            result.summary.memoryUsage = memoryStorage.storageUsagePercent;
-          } else {
-            console.log(`No valid memory storage found for device ${device.name}`);
+          } else if (groupName === 'resources') {
+            // CPU Usage with fallback
+            if (metrics.cpuUsage !== undefined && metrics.cpuUsage !== null) {
+              result.summary.cpuUsage = parseInt(metrics.cpuUsage);
+            } else {
+              result.summary.cpuUsage = null;
+              result.summary.unsupportedMetrics.push('cpuUsage');
+            }
+
+            // Memory Usage with multiple fallback mechanisms
+            let memoryUsage = null;
+            let memorySource = '';
+
+            // Try storage-based memory usage first
+            if (result.metrics.storage && result.metrics.storage.length > 0) {
+              const memStorage = result.metrics.storage.find(s =>
+                (s.description || s.storageDescr || '').toLowerCase().includes('memory')
+              );
+              if (memStorage && (memStorage.storageUsagePercent !== undefined || memStorage.usedPercent !== undefined)) {
+                memoryUsage = Math.round(memStorage.storageUsagePercent || memStorage.usedPercent);
+                memorySource = 'storage';
+              }
+            }
+
+            // Fallback to OID-based calculation
+            if (memoryUsage === null && metrics.memorySize > 0 && metrics.memoryUsed !== undefined) {
+              memoryUsage = Math.round((metrics.memoryUsed / metrics.memorySize) * 100);
+              memorySource = 'oid';
+            }
+
+            // If both methods fail, mark as unsupported
+            if (memoryUsage === null) {
+              result.summary.unsupportedMetrics.push('memoryUsage');
+            }
+
+            result.summary.memoryUsage = memoryUsage;
+            console.log(`[SNMP DEBUG] Device ${device.name}: memoryUsage=${memoryUsage}% (source: ${memorySource}), cpuUsage=${result.summary.cpuUsage}%`);
+          } else if (groupName === 'temperature') {
+            // Temperature with fallback mechanisms
+            if (metrics.boardTemperature !== undefined && metrics.boardTemperature !== null) {
+              result.summary.temperature = metrics.boardTemperature;
+            } else if (metrics.cpuTemperature !== undefined && metrics.cpuTemperature !== null) {
+              result.summary.temperature = metrics.cpuTemperature;
+            } else {
+              result.summary.temperature = null;
+              result.summary.unsupportedMetrics.push('temperature');
+            }
           }
         }
-      } catch (error) {
-        console.error(`Error calculating memory usage: ${error.message}`);
-        result.summary.errors.push(`Failed to calculate memory usage: ${error.message}`);
+      } catch (groupError) {
+        console.error(`Error collecting ${groupName} metrics: ${groupError.message}`);
+        result.summary.errors.push(`${groupName}: ${groupError.message}`);
       }
     }
     
-    // Find disk storage
-    try {
-      // First check if storage metrics exist
-      if (!result.metrics.storage || !Array.isArray(result.metrics.storage) || result.metrics.storage.length === 0) {
-        console.log(`No storage metrics found for device ${device.name}`);
-      } else {
-        // Safely find disk storage
-        const diskStorage = result.metrics.storage.find(storage => {
-          // Extra safety checks
-          if (!storage) return false;
-          if (!storage.storageDescr) return false;
-          if (typeof storage.storageDescr !== 'string') {
-            console.log(`Non-string storageDescr found: ${typeof storage.storageDescr}`);
-            return false;
-          }
-          
-          const lowerDesc = storage.storageDescr.toLowerCase();
-          return lowerDesc.includes('disk') || 
-                 lowerDesc.includes('flash') ||
-                 lowerDesc.includes('drive');
-        });
-        
-        if (diskStorage && typeof diskStorage.storageUsagePercent === 'number') {
-          result.summary.diskUsage = diskStorage.storageUsagePercent;
-        } else {
-          console.log(`No valid disk storage found for device ${device.name}`);
-        }
-      }
-    } catch (error) {
-      console.error(`Error calculating disk usage: ${error.message}`);
-      result.summary.errors.push(`Failed to calculate disk usage: ${error.message}`);
-    }
-    
-    return result;
-  } finally {
+    // Session cleanup
     session.close();
-  }
-};
-
-/**
- * Starts collecting metrics from a device at specified intervals
- * @param {Object} device - Device configuration
- * @param {Function} callback - Function to call with collected metrics
- * @returns {Object} - Control object with start/stop methods
- */
-const startCollector = (device, callback) => {
-  // Define variables at the beginning
-  const timers = {};
-  const collectors = {};
-  
-  // Define functions for start and stop
-  const start = () => {
-    console.log(`Starting metric collection for device ${device.name}`);
     
-    for (const intervalType in collectors) {
-      if (collectors[intervalType].length === 0) continue;
-      
-      const interval = DEFAULT_INTERVALS[intervalType];
-      const groups = collectors[intervalType];
-      
-      console.log(`Setting up ${intervalType} collector (${interval}ms) for ${device.name}: ${groups.join(', ')}`);
-      
-      // Function to safely collect metrics and handle errors
-      const safeCollect = async () => {
-        try {
-          const result = await collectMetrics(device, groups);
-          console.log(`Collection completed for ${device.name} (${intervalType})`);
-          
-          // Check if there were errors
-          if (result.summary.errors.length > 0) {
-            console.warn(`Collection completed with ${result.summary.errors.length} errors for ${device.name}`);
-          }
-          
-          callback(null, result);
-        } catch (error) {
-          console.error(`Error in collection for ${device.name} (${intervalType}): ${error.message}`);
-          callback(error);
-        }
-      };
-      
-      // Immediately collect metrics when started
-      safeCollect();
-      
-      // Schedule periodic collection
-      timers[intervalType] = setInterval(safeCollect, interval);
+    // Set response time
+    result.responseTime = Date.now() - startTime;
+    
+    // If we have errors but got some data, mark as degraded
+    if (result.summary.errors.length > 0) {
+      result.summary.status = 'degraded';
     }
-  };
-  
-  const stop = () => {
-    console.log(`Stopping metric collection for device ${device.name}`);
     
-    for (const intervalType in timers) {
-      if (timers[intervalType]) {
-        clearInterval(timers[intervalType]);
-        timers[intervalType] = null;
-      }
-    }
-  };
-  
-  // Create collectors for each interval type
-  for (const intervalType in DEFAULT_INTERVALS) {
-    collectors[intervalType] = [];
-    
-    // Group metrics by interval
-    for (const [groupName, group] of Object.entries(METRICS)) {
-      if (group.interval === intervalType) {
-        collectors[intervalType].push(groupName);
-      }
-    }
-  }
-  
-  // Return the collector object with start and stop methods
-  const collectorObj = {
-    start,
-    stop
-  };
-  
-  return collectorObj;
-};
-
-/**
- * Create SNMP session
- * @param {Object} config - SNMP configuration
- * @returns {Object} SNMP session
- */
-const createSnmpSession = (config) => {
-  const options = {
-    port: config.snmpPort || 161,
-    retries: 1,
-    timeout: config.snmpTimeout || 5000,
-    version: snmp.Version2c
-  };
-
-  if (config.snmpVersion === '1') {
-    options.version = snmp.Version1;
-  } else if (config.snmpVersion === '3') {
-    options.version = snmp.Version3;
-  }
-
-  const community = config.snmpCommunity || 'public';
-  return snmp.createSession(config.ipAddress, community, options);
-};
-
-/**
- * Get SNMP data from device using provided OIDs
- * @param {Object} device - Device object with SNMP configuration
- * @param {Array} oids - Array of OIDs to get
- * @returns {Promise<Object>} - Object with OID keys and values
- */
-const getSnmpData = async (device, oids) => {
-  return new Promise((resolve, reject) => {
-    const session = createSnmpSession(device);
-    
-    session.get(oids, (error, varbinds) => {
+    console.log('[SNMP DEBUG] Final metrics result:', JSON.stringify(result, null, 2));
+    return result;
+  } catch (error) {
+    // Make sure to close the session
+    try {
       session.close();
-      
-      if (error) {
-        console.error(`SNMP Error for ${device.name}: ${error.message}`);
-        return reject(error);
-      }
-      
-      const result = {};
-      
-      for (let i = 0; i < varbinds.length; i++) {
-        if (snmp.isVarbindError(varbinds[i])) {
-          console.error(`SNMP Error for OID ${oids[i]}: ${snmp.varbindError(varbinds[i])}`);
-        } else {
-          let value = varbinds[i].value;
-          
-          // Handle non-serializable data types
-          if (value instanceof Buffer) {
-            value = value.toString();
-          } else if (typeof value === 'bigint') {
-            value = Number(value);
-          }
-          
-          result[oids[i]] = value;
-        }
-      }
-      
-      resolve(result);
-    });
-  });
+    } catch (e) {
+      console.error(`Error closing session: ${e.message}`);
+    }
+    
+    console.error(`Failed to collect metrics for ${device.name}: ${error.message}`);
+    throw error;
+  }
 };
 
 /**
@@ -714,78 +583,74 @@ const getSnmpData = async (device, oids) => {
  * @returns {Promise<Object>} - System information object
  */
 const getSystemInfo = async (device) => {
-  const oids = [
-    MIKROTIK_OIDS.sysDescr,
-    MIKROTIK_OIDS.sysUpTime,
-    MIKROTIK_OIDS.sysName,
-    MIKROTIK_OIDS.sysLocation
-  ];
-  
+  let session;
   try {
-    const result = await getSnmpData(device, oids);
-    
-    // Convert uptime from timeticks (hundredths of a second) to seconds
-    const uptimeTicks = result[MIKROTIK_OIDS.sysUpTime];
-    const uptimeSeconds = uptimeTicks ? Math.floor(uptimeTicks / 100) : 0;
-    
-    return {
-      description: result[MIKROTIK_OIDS.sysDescr] || 'Unknown',
-      uptime: uptimeSeconds,
-      name: result[MIKROTIK_OIDS.sysName] || 'Unknown',
-      location: result[MIKROTIK_OIDS.sysLocation] || 'Unknown'
-    };
+    session = await createSnmpSession(device);
+    const result = await collectMetrics(device, session, ['system']);
+    return result.metrics.system;
   } catch (error) {
     console.error(`Failed to get system info for ${device.name}:`, error.message);
     throw error;
+  } finally {
+    if (session) {
+      session.close();
+    }
   }
 };
 
 /**
- * Get resource usage from device
+ * Get resource usage information from device
  * @param {Object} device - Device object with SNMP configuration
- * @returns {Promise<Object>} - Resource usage object
+ * @returns {Promise<Object>} - Resource usage information object
  */
 const getResourceUsage = async (device) => {
   try {
-    // Get CPU usage
-    const cpuResult = await getSnmpData(device, [MIKROTIK_OIDS.hrProcessorLoad]);
-    const cpuUsage = cpuResult[MIKROTIK_OIDS.hrProcessorLoad] || 0;
-    
-    // Get memory info
-    const memorySize = await getSnmpData(device, [MIKROTIK_OIDS.hrMemorySize]);
-    const totalMemory = memorySize[MIKROTIK_OIDS.hrMemorySize] || 0;
-    
-    // Typically index 1 is physical memory on MikroTik
-    const memoryUsed = await getSnmpData(device, [
-      `${MIKROTIK_OIDS.hrStorageUsed}.1`,
-      `${MIKROTIK_OIDS.hrStorageSize}.1`
-    ]);
-    
-    const usedMem = memoryUsed[`${MIKROTIK_OIDS.hrStorageUsed}.1`] || 0;
-    const totalMem = memoryUsed[`${MIKROTIK_OIDS.hrStorageSize}.1`] || totalMemory;
-    
-    const memoryUsage = totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0;
-    
-    // Get disk usage - typically index 2 on MikroTik
-    const diskUsage = await getSnmpData(device, [
-      `${MIKROTIK_OIDS.hrStorageUsed}.2`,
-      `${MIKROTIK_OIDS.hrStorageSize}.2`
-    ]);
+    const session = await createSnmpSession(device);
+    try {
+      // Get CPU usage
+      const cpuResult = await getSnmpData(device, [MIKROTIK_OIDS.hrProcessorLoad], session);
+      const cpuUsage = cpuResult[MIKROTIK_OIDS.hrProcessorLoad] || 0;
+      
+      // Get memory info
+      const memorySize = await getSnmpData(device, [MIKROTIK_OIDS.hrMemorySize], session);
+      const totalMemory = memorySize[MIKROTIK_OIDS.hrMemorySize] || 0;
+      
+      // Typically index 1 is physical memory on MikroTik
+      const memoryUsed = await getSnmpData(device, [
+        `${MIKROTIK_OIDS.hrStorageUsed}.1`,
+        `${MIKROTIK_OIDS.hrStorageSize}.1`
+      ], session);
+      
+      const usedMem = memoryUsed[`${MIKROTIK_OIDS.hrStorageUsed}.1`] || 0;
+      const totalMem = memoryUsed[`${MIKROTIK_OIDS.hrStorageSize}.1`] || totalMemory;
+      
+      const memoryUsage = totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0;
+      
+      // Get disk usage - typically index 2 on MikroTik
+      const diskUsage = await getSnmpData(device, [
+        `${MIKROTIK_OIDS.hrStorageUsed}.2`,
+        `${MIKROTIK_OIDS.hrStorageSize}.2`
+      ], session);
     
     const usedDisk = diskUsage[`${MIKROTIK_OIDS.hrStorageUsed}.2`] || 0;
-    const totalDisk = diskUsage[`${MIKROTIK_OIDS.hrStorageSize}.2`] || 1;
-    
-    const diskUsagePercent = totalDisk > 0 ? Math.round((usedDisk / totalDisk) * 100) : 0;
-    
-    return {
-      cpuUsage: parseInt(cpuUsage),
-      memoryUsage: memoryUsage,
-      diskUsage: diskUsagePercent,
-      totalMemory: totalMem,
-      usedMemory: usedMem,
-      totalDisk: totalDisk,
-      usedDisk: usedDisk
-    };
+      const totalDisk = diskUsage[`${MIKROTIK_OIDS.hrStorageSize}.2`] || 1;
+      
+      const diskUsagePercent = totalDisk > 0 ? Math.round((usedDisk / totalDisk) * 100) : 0;
+      
+      return {
+        cpuUsage: parseInt(cpuUsage),
+        memoryUsage: memoryUsage,
+        diskUsage: diskUsagePercent,
+        totalMemory: totalMem,
+        usedMemory: usedMem,
+        totalDisk: totalDisk,
+        usedDisk: usedDisk
+      };
+    } finally {
+      if (session) {
+        session.close();
+      }
+    }
   } catch (error) {
     console.error(`Failed to get resource usage for ${device.name}:`, error.message);
     throw error;
@@ -798,24 +663,32 @@ const getResourceUsage = async (device) => {
  * @returns {Promise<Object>} - Temperature information object
  */
 const getTemperature = async (device) => {
-  const oids = [
-    MIKROTIK_OIDS.mtxrHlTemperature,
-    MIKROTIK_OIDS.mtxrHlProcessorTemperature
-  ];
-  
   try {
-    const result = await getSnmpData(device, oids);
+    const session = await createSnmpSession(device);
+    try {
+      const result = await getSnmpData(device, [
+        MIKROTIK_OIDS.mtxrHlTemperature,
+        MIKROTIK_OIDS.mtxrHlProcessorTemperature
+      ], session);
     
-    // MikroTik returns temperature in tenths of degrees Celsius
-    const boardTemp = result[MIKROTIK_OIDS.mtxrHlTemperature];
-    const cpuTemp = result[MIKROTIK_OIDS.mtxrHlProcessorTemperature];
-    
-    return {
-      boardTemperature: boardTemp ? (boardTemp / 10).toFixed(1) : null,
-      cpuTemperature: cpuTemp ? (cpuTemp / 10).toFixed(1) : null
-    };
+    let boardTemp = result[MIKROTIK_OIDS.mtxrHlTemperature];
+      let cpuTemp = result[MIKROTIK_OIDS.mtxrHlProcessorTemperature];
+      
+      // Convert to degrees (MikroTik uses tenths of degrees)
+      if (boardTemp) boardTemp = boardTemp / 10;
+      if (cpuTemp) cpuTemp = cpuTemp / 10;
+      
+      return {
+        boardTemperature: boardTemp,
+        cpuTemperature: cpuTemp
+      };
+    } finally {
+      if (session) {
+        session.close();
+      }
+    }
   } catch (error) {
-    console.error(`Failed to get temperature info for ${device.name}:`, error.message);
+    console.error(`Failed to get temperature for ${device.name}:`, error.message);
     throw error;
   }
 };
@@ -827,48 +700,49 @@ const getTemperature = async (device) => {
  */
 const getNetworkInterfaces = async (device) => {
   try {
-    // First get number of interfaces
-    const ifNumberResult = await getSnmpData(device, [MIKROTIK_OIDS.ifNumber]);
-    const ifNumber = ifNumberResult[MIKROTIK_OIDS.ifNumber];
+    const session = await createSnmpSession(device);
+    try {
+      // Get interface count
+      const ifNumberResult = await getSnmpData(device, [MIKROTIK_OIDS.ifNumber], session);
+      const ifNumber = parseInt(ifNumberResult[MIKROTIK_OIDS.ifNumber] || 0);
     
-    if (!ifNumber) {
-      throw new Error('Could not determine number of interfaces');
-    }
-    
-    console.log(`Device ${device.name} has ${ifNumber} interfaces`);
-    
-    // For each interface, get description, status, and traffic data
     const interfaces = [];
-    
-    for (let i = 1; i <= ifNumber; i++) {
-      const ifOids = [
-        `${MIKROTIK_OIDS.ifDescr}.${i}`,
-        `${MIKROTIK_OIDS.ifOperStatus}.${i}`,
-        `${MIKROTIK_OIDS.ifInOctets}.${i}`,
-        `${MIKROTIK_OIDS.ifOutOctets}.${i}`,
-        `${MIKROTIK_OIDS.ifInErrors}.${i}`,
-        `${MIKROTIK_OIDS.ifOutErrors}.${i}`
-      ];
       
-      try {
-        const ifData = await getSnmpData(device, ifOids);
+      // Collect data for each interface
+      for (let i = 1; i <= ifNumber; i++) {
+        const ifOids = [
+          `${MIKROTIK_OIDS.ifDescr}.${i}`,
+          `${MIKROTIK_OIDS.ifOperStatus}.${i}`,
+          `${MIKROTIK_OIDS.ifInOctets}.${i}`,
+          `${MIKROTIK_OIDS.ifOutOctets}.${i}`,
+          `${MIKROTIK_OIDS.ifInErrors}.${i}`,
+          `${MIKROTIK_OIDS.ifOutErrors}.${i}`
+        ];
         
-        interfaces.push({
-          index: i,
-          ifDescr: ifData[`${MIKROTIK_OIDS.ifDescr}.${i}`] || `Interface ${i}`,
-          ifOperStatus: parseInt(ifData[`${MIKROTIK_OIDS.ifOperStatus}.${i}`] || 0),
-          ifInOctets: parseInt(ifData[`${MIKROTIK_OIDS.ifInOctets}.${i}`] || 0),
-          ifOutOctets: parseInt(ifData[`${MIKROTIK_OIDS.ifOutOctets}.${i}`] || 0),
-          ifInErrors: parseInt(ifData[`${MIKROTIK_OIDS.ifInErrors}.${i}`] || 0),
-          ifOutErrors: parseInt(ifData[`${MIKROTIK_OIDS.ifOutErrors}.${i}`] || 0),
-          status: parseInt(ifData[`${MIKROTIK_OIDS.ifOperStatus}.${i}`]) === 1 ? 'up' : 'down'
-        });
-      } catch (err) {
-        console.error(`Error getting data for interface ${i}:`, err.message);
+        try {
+          const ifData = await getSnmpData(device, ifOids, session);
+          
+          interfaces.push({
+            index: i,
+            ifDescr: ifData[`${MIKROTIK_OIDS.ifDescr}.${i}`] || `Interface ${i}`,
+            ifOperStatus: parseInt(ifData[`${MIKROTIK_OIDS.ifOperStatus}.${i}`] || 0),
+            ifInOctets: parseInt(ifData[`${MIKROTIK_OIDS.ifInOctets}.${i}`] || 0),
+            ifOutOctets: parseInt(ifData[`${MIKROTIK_OIDS.ifOutOctets}.${i}`] || 0),
+            ifInErrors: parseInt(ifData[`${MIKROTIK_OIDS.ifInErrors}.${i}`] || 0),
+            ifOutErrors: parseInt(ifData[`${MIKROTIK_OIDS.ifOutErrors}.${i}`] || 0),
+            status: parseInt(ifData[`${MIKROTIK_OIDS.ifOperStatus}.${i}`]) === 1 ? 'up' : 'down'
+          });
+        } catch (err) {
+          console.error(`Error getting data for interface ${i}:`, err.message);
+        }
+      }
+      
+      return interfaces;
+    } finally {
+      if (session) {
+        session.close();
       }
     }
-    
-    return interfaces;
   } catch (error) {
     console.error('Error getting network interfaces:', error.message);
     throw error;
@@ -888,53 +762,60 @@ const getStorageInfo = async (device) => {
       storageOids.push(`1.3.6.1.2.1.25.2.3.1.3.${i}`); // hrStorageDescr
     }
     
-    const storageDescrResults = await getSnmpData(device, storageOids);
+    const session = await createSnmpSession(device);
+    try {
+      const storageDescrResults = await getSnmpData(device, storageOids, session);
     const storageIndices = Object.keys(storageDescrResults).map(oid => {
-      const parts = oid.split('.');
-      return parseInt(parts[parts.length - 1]);
-    });
-    
-    const storage = [];
-    
-    for (const index of storageIndices) {
-      const detailOids = [
-        `1.3.6.1.2.1.25.2.3.1.3.${index}`, // hrStorageDescr
-        `1.3.6.1.2.1.25.2.3.1.4.${index}`, // hrStorageAllocationUnits
-        `1.3.6.1.2.1.25.2.3.1.5.${index}`, // hrStorageSize
-        `1.3.6.1.2.1.25.2.3.1.6.${index}`  // hrStorageUsed
-      ];
+        const parts = oid.split('.');
+        return parseInt(parts[parts.length - 1]);
+      });
       
-      try {
-        const storageData = await getSnmpData(device, detailOids);
+      const storage = [];
+      
+      for (const index of storageIndices) {
+        const detailOids = [
+          `1.3.6.1.2.1.25.2.3.1.3.${index}`, // hrStorageDescr
+          `1.3.6.1.2.1.25.2.3.1.4.${index}`, // hrStorageAllocationUnits
+          `1.3.6.1.2.1.25.2.3.1.5.${index}`, // hrStorageSize
+          `1.3.6.1.2.1.25.2.3.1.6.${index}`  // hrStorageUsed
+        ];
         
-        const descr = storageData[`1.3.6.1.2.1.25.2.3.1.3.${index}`];
-        const allocationUnits = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.4.${index}`] || 0);
-        const size = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.5.${index}`] || 0);
-        const used = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.6.${index}`] || 0);
-        
-        // Skip non-physical storage
-        if (descr && (descr.includes('Physical') || descr.includes('Fixed') || descr.includes('RAM'))) {
-          const totalBytes = size * allocationUnits;
-          const usedBytes = used * allocationUnits;
-          const freeBytes = totalBytes - usedBytes;
-          const usedPercent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) : 0;
+        try {
+          const storageData = await getSnmpData(device, detailOids, session);
           
-          storage.push({
-            index,
-            description: descr,
-            sizeBytes: totalBytes,
-            usedBytes,
-            freeBytes,
-            usedPercent,
-            allocationUnits
-          });
+          const descr = storageData[`1.3.6.1.2.1.25.2.3.1.3.${index}`];
+          const allocationUnits = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.4.${index}`] || 0);
+          const size = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.5.${index}`] || 0);
+          const used = parseInt(storageData[`1.3.6.1.2.1.25.2.3.1.6.${index}`] || 0);
+          
+          // Skip non-physical storage
+          if (descr && (descr.includes('Physical') || descr.includes('Fixed') || descr.includes('RAM'))) {
+            const totalBytes = size * allocationUnits;
+            const usedBytes = used * allocationUnits;
+            const freeBytes = totalBytes - usedBytes;
+            const usedPercent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) : 0;
+            
+            storage.push({
+              index,
+              description: descr,
+              sizeBytes: totalBytes,
+              usedBytes,
+              freeBytes,
+              usedPercent,
+              allocationUnits
+            });
+          }
+        } catch (err) {
+          console.error(`Error getting data for storage ${index}:`, err.message);
         }
-      } catch (err) {
-        console.error(`Error getting data for storage ${index}:`, err.message);
+      }
+      
+      return storage;
+    } finally {
+      if (session) {
+        session.close();
       }
     }
-    
-    return storage;
   } catch (error) {
     console.error('Error getting storage info:', error.message);
     throw error;
@@ -980,18 +861,106 @@ const getInterfaceStats = async (device, ifIndex) => {
 };
 
 /**
+ * Get SNMP data from device using provided OIDs
+ * @param {Object} device - Device object with SNMP configuration
+ * @param {Array} oids - Array of OIDs to get
+ * @returns {Promise<Object>} - Object with OID keys and values
+ */
+const getSnmpData = async (device, oids, session) => {
+  return new Promise((resolve, reject) => {
+    if (!session) {
+      return reject(new Error('SNMP session is required for getting data'));
+    }
+    
+    session.get(oids, (error, varbinds) => {
+      session.close();
+      
+      if (error) {
+        console.error(`SNMP Error for ${device.name}: ${error.message}`);
+        return reject(error);
+      }
+      
+      const result = {};
+      
+      for (let i = 0; i < varbinds.length; i++) {
+        if (snmp.isVarbindError(varbinds[i])) {
+          console.error(`SNMP Error for OID ${oids[i]}: ${snmp.varbindError(varbinds[i])}`);
+        } else {
+          let value = varbinds[i].value;
+          
+          // Handle non-serializable data types
+          if (value instanceof Buffer) {
+            value = value.toString();
+          } else if (typeof value === 'bigint') {
+            value = Number(value);
+          }
+          
+          result[oids[i]] = value;
+        }
+      }
+      
+      resolve(result);
+    });
+  });
+};
+
+/**
+ * Create an SNMP session
+ * @param {Object} config - SNMP configuration
+ * @returns {Object} - SNMP session
+ */
+const createSnmpSession = async (config) => {
+  try {
+    const options = {
+      port: config.snmpPort || 161,
+      retries: 1,
+      timeout: config.snmpTimeout || 5000,
+      version: snmp.Version2c
+    };
+
+    if (config.snmpVersion === '1') {
+      options.version = snmp.Version1;
+    } else if (config.snmpVersion === '3') {
+      options.version = snmp.Version3;
+    }
+
+    const community = config.snmpCommunity || 'public';
+    const session = snmp.createSession(config.ipAddress, community, options);
+
+    // Test session connectivity immediately
+    return new Promise((resolve, reject) => {
+      session.get([MIKROTIK_OIDS.sysDescr], (error, varbinds) => {
+        if (error) {
+          session.close();
+          reject(new Error(`SNMP session test failed: ${error.message}`));
+        } else if (snmp.isVarbindError(varbinds[0])) {
+          session.close();
+          reject(new Error(`SNMP authentication failed: Invalid community string or access denied`));
+        } else {
+          resolve(session);
+        }
+      });
+    });
+  } catch (error) {
+    throw new Error(`Failed to initialize SNMP session: ${error.message}`);
+  }
+};
+
+/**
  * Test SNMP connectivity to a device
  * @param {Object} device - Device object with SNMP configuration
  * @returns {Promise<Object>} - Test results
  */
 const testSnmpConnectivity = async (device) => {
+  let session;
   try {
     const startTime = Date.now();
-    await getSnmpData(device, [MIKROTIK_OIDS.sysDescr]);
+    session = await createSnmpSession(device);
+    await getSnmpData(device, [MIKROTIK_OIDS.sysDescr], session);
     const responseTime = Date.now() - startTime;
     
     return {
-      success: true,
+      success: true, 
       responseTime,
       message: 'SNMP connectivity successful'
     };
@@ -1001,7 +970,314 @@ const testSnmpConnectivity = async (device) => {
       responseTime: null,
       message: error.message
     };
+  } finally {
+    if (session) {
+      session.close();
+    }
   }
+};
+
+/**
+ * Collector class for managing SNMP metrics collection with events
+ * This enhanced collector provides event-based updates for real-time metrics
+ */
+class SnmpCollector extends EventEmitter {
+  constructor(device, options = {}) {
+    super();
+    this.device = device;
+    this.isRunning = false;
+    this.intervals = {
+      fast: options.fastInterval || DEFAULT_INTERVALS.fast,
+      standard: options.standardInterval || DEFAULT_INTERVALS.standard,
+      slow: options.slowInterval || DEFAULT_INTERVALS.slow
+    };
+    this.timers = {};
+    this.lastMetrics = null;
+    this.consecutiveErrors = 0;
+    this.maxErrors = options.maxErrors || 5;
+    this.stats = {
+      totalCollections: 0,
+      successfulCollections: 0,
+      failedCollections: 0,
+      lastCollectionTime: null,
+      lastSuccessTime: null,
+      lastError: null,
+      uptime: 0,
+      startTime: null
+    };
+  }
+
+  /**
+   * Start the collector
+   */
+  start() {
+    if (this.isRunning) {
+      return false;
+    }
+
+    this.isRunning = true;
+    this.stats.startTime = Date.now();
+    this.emit('start', { deviceId: this.device._id, deviceName: this.device.name });
+    
+    // Start collection immediately
+    this._collect();
+    
+    // Schedule collections based on intervals
+    this.timers.fast = setInterval(() => {
+      this._collectByInterval('fast');
+    }, this.intervals.fast);
+    
+    this.timers.standard = setInterval(() => {
+      this._collectByInterval('standard');
+    }, this.intervals.standard);
+    
+    this.timers.slow = setInterval(() => {
+      this._collectByInterval('slow');
+    }, this.intervals.slow);
+    
+    // Update uptime every minute
+    this.timers.uptime = setInterval(() => {
+      this.stats.uptime = Math.floor((Date.now() - this.stats.startTime) / 1000);
+    }, 60000);
+    
+    return true;
+  }
+
+  /**
+   * Stop the collector
+   */
+  stop() {
+    if (!this.isRunning) {
+      return false;
+    }
+
+    this.isRunning = false;
+    
+    // Clear all intervals
+    Object.values(this.timers).forEach(timer => {
+      clearInterval(timer);
+    });
+    
+    this.timers = {};
+    this.emit('stop', { 
+      deviceId: this.device._id, 
+      deviceName: this.device.name,
+      stats: this.stats
+    });
+    
+    return true;
+  }
+
+  /**
+   * Get the current status of the collector
+   */
+  getStatus() {
+    return {
+      deviceId: this.device._id,
+      deviceName: this.device.name,
+      isRunning: this.isRunning,
+      stats: this.stats,
+      lastMetrics: this.lastMetrics ? {
+        timestamp: this.lastMetrics.timestamp,
+        summary: this.lastMetrics.summary
+      } : null
+    };
+  }
+
+  /**
+   * Collect metrics immediately (one-time)
+   */
+  async collectNow() {
+    return this._collect();
+  }
+  
+  /**
+   * Private method to collect metrics by interval type
+   */
+  _collectByInterval(intervalType) {
+    if (!this.isRunning) return;
+    
+    Object.entries(METRICS).forEach(([metricGroup, config]) => {
+      if (config.interval === intervalType) {
+        this._collectMetricGroup(metricGroup);
+      }
+    });
+  }
+  
+  /**
+   * Private method to collect a specific metric group
+   */
+  async _collectMetricGroup(metricGroup) {
+    if (!this.isRunning) return;
+    
+    try {
+      // Implement specific collection logic for different metric groups
+      // This is a placeholder for the actual implementation
+      console.log(`Collecting ${metricGroup} metrics for ${this.device.name}`);
+      
+      // Update last metrics with the new data for this group
+      if (!this.lastMetrics) {
+        this.lastMetrics = {
+          timestamp: new Date(),
+          metrics: {},
+          summary: {}
+        };
+      }
+      
+      // Emit the collected metrics for this group
+      this.emit('metrics', {
+        deviceId: this.device._id,
+        deviceName: this.device.name,
+        metricGroup,
+        timestamp: new Date(),
+        // Add the actual metrics here
+      });
+      
+    } catch (error) {
+      console.error(`Error collecting ${metricGroup} metrics for ${this.device.name}:`, error);
+      this.emit('error', {
+        deviceId: this.device._id,
+        deviceName: this.device.name,
+        metricGroup,
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * Private method to collect all metrics
+   */
+  async _collect() {
+    if (!this.isRunning) return null;
+
+    this.stats.totalCollections++;
+    this.stats.lastCollectionTime = new Date();
+
+    try {
+      // First check device connectivity
+      console.log(`Checking if device ${this.device.name} (${this.device.ipAddress}) is reachable...`);
+      const isReachable = await pingHost(this.device.ipAddress);
+      
+      if (!isReachable.success) {
+        console.warn(`Device ${this.device.name} is not reachable: ${isReachable.error}`);
+        throw new Error(`Device ${this.device.name} is not reachable: ${isReachable.error}`);
+      }
+      
+      console.log(`Device ${this.device.name} is reachable (response time: ${isReachable.responseTime}ms)`);
+
+      let session;
+      try {
+        session = await createSnmpSession(this.device);
+        const metrics = await collectMetrics(this.device, session);
+        this.lastMetrics = metrics;
+        this.stats.successfulCollections++;
+        this.stats.lastSuccessTime = new Date();
+        this.consecutiveErrors = 0;
+      } catch (error) {
+        if (session) {
+          session.close();
+        }
+        throw error;
+      }
+
+      // Defensive: ensure metrics is always an object with summary
+      let safeMetrics = metrics;
+      if (!safeMetrics || typeof safeMetrics !== 'object') {
+        safeMetrics = { summary: { status: 'error', errors: ['No metrics collected'] }, metrics: {} };
+      } else if (!safeMetrics.summary) {
+        safeMetrics.summary = { status: 'error', errors: ['No summary in metrics'] };
+      }
+
+      // Handle unsupported metrics
+      if (safeMetrics.summary.unsupportedMetrics && safeMetrics.summary.unsupportedMetrics.length > 0) {
+        console.warn(`Device ${this.device.name} has unsupported metrics: ${safeMetrics.summary.unsupportedMetrics.join(', ')}`);
+        this.emit('warning', {
+          deviceId: this.device._id,
+          deviceName: this.device.name,
+          type: 'unsupported_metrics',
+          metrics: safeMetrics.summary.unsupportedMetrics
+        });
+      }
+
+      this.emit('metrics', {
+        deviceId: this.device._id,
+        deviceName: this.device.name,
+        timestamp: new Date(),
+        metrics: safeMetrics
+      });
+
+      return safeMetrics;
+    } catch (error) {
+      this.stats.failedCollections++;
+      this.stats.lastError = {
+        timestamp: new Date(),
+        message: error.message,
+        type: error.code || 'unknown'
+      };
+      this.consecutiveErrors++;
+
+      // Categorize errors
+      let errorType = 'unknown';
+      if (error.message.includes('not reachable')) {
+        errorType = 'connectivity';
+      } else if (error.message.includes('Authentication failed')) {
+        errorType = 'authentication';
+      } else if (error.message.includes('Timeout')) {
+        errorType = 'timeout';
+      } else if (error.message.includes('NoSuchObject') || error.message.includes('NoSuchInstance')) {
+        errorType = 'unsupported_oid';
+      }
+
+      // Emit error event with categorized error
+      this.emit('error', {
+        deviceId: this.device._id,
+        deviceName: this.device.name,
+        error: error.message,
+        errorType,
+        timestamp: new Date(),
+        consecutiveErrors: this.consecutiveErrors
+      });
+
+      // Auto-stop collector after too many consecutive errors
+      if (this.consecutiveErrors >= this.maxErrors) {
+        console.error(`Too many consecutive errors (${this.consecutiveErrors}) for ${this.device.name}, stopping collector`);
+        this.stop();
+        
+        this.emit('auto-stop', {
+          deviceId: this.device._id,
+          deviceName: this.device.name,
+          reason: `Too many consecutive errors: ${this.consecutiveErrors}`,
+          lastError: error.message,
+          errorType
+        });
+      }
+
+      return { summary: { status: 'error', errors: [error.message], errorType }, metrics: {} };
+    }
+  }
+}
+
+/**
+ * Create and start a collector for a device
+ * @param {Object} device - Device object
+ * @param {Function} callback - Callback function for metrics/errors
+ * @param {Object} options - Collector options
+ * @returns {SnmpCollector} - Collector instance
+ */
+const startCollector = (device, callback, options = {}) => {
+  const collector = new SnmpCollector(device, options);
+  
+  if (callback) {
+    collector.on('metrics', (data) => {
+      callback(null, data.metrics);
+    });
+    
+    collector.on('error', (data) => {
+      callback(new Error(data.error));
+    });
+  }
+  
+  return collector;
 };
 
 module.exports = {
@@ -1018,5 +1294,6 @@ module.exports = {
   getStorageInfo,
   testSnmpConnectivity,
   collectMetrics,
-  startCollector
+  startCollector,
+  SnmpCollector
 };
