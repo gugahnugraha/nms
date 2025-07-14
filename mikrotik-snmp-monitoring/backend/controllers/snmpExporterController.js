@@ -230,10 +230,8 @@ const getLatestMetrics = async (req, res) => {
     // Collect metrics directly
     try {
       const metrics = await collectMetrics(device);
-      
       // Save to database
       const { summary } = metrics;
-      
       // Create monitoring log
       const monitoringLog = new MonitoringLog({
         device: deviceId,
@@ -246,20 +244,54 @@ const getLatestMetrics = async (req, res) => {
         message: 'Ad-hoc metrics collection',
         raw: JSON.stringify(metrics)
       });
-      
       await monitoringLog.save();
-      
       res.json({
         success: true,
         data: metrics
       });
     } catch (snmpError) {
       console.error(`Failed to collect metrics for device ${device.name}:`, snmpError);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to collect metrics',
-        error: snmpError.message
-      });
+      // Fallback: get latest MonitoringLog from DB
+      try {
+        const latestLog = await MonitoringLog.findOne({ device: deviceId })
+          .sort({ createdAt: -1 });
+        if (latestLog) {
+          let rawData = null;
+          try {
+            rawData = typeof latestLog.raw === 'string' ? JSON.parse(latestLog.raw) : latestLog.raw;
+          } catch (e) {
+            rawData = null;
+          }
+          res.json({
+            success: true,
+            data: rawData || {
+              summary: {
+                cpuUsage: latestLog.cpuUsage,
+                memoryUsage: latestLog.memoryUsage,
+                diskUsage: latestLog.diskUsage,
+                temperature: latestLog.temperature,
+                status: latestLog.status,
+                responseTime: latestLog.responseTime,
+                message: latestLog.message
+              }
+            },
+            fallback: true,
+            message: 'Returned latest metrics from database due to SNMP failure.'
+          });
+        } else {
+          res.status(500).json({
+            success: false,
+            message: 'Failed to collect metrics and no previous data found',
+            error: snmpError.message
+          });
+        }
+      } catch (dbError) {
+        res.status(500).json({
+          success: false,
+          message: 'Failed to collect metrics and failed to fetch from database',
+          error: snmpError.message + ' | DB: ' + dbError.message
+        });
+      }
     }
   } catch (error) {
     console.error('Error getting latest metrics:', error);
@@ -308,6 +340,83 @@ const getActiveCollectors = async (req, res) => {
       success: false,
       message: error.message
     });
+  }
+};
+
+// @desc    DEBUG: Insert a test MonitoringLog with real metric values
+// @route   POST /api/snmp-exporter/debug-insert/:deviceId
+// @access  Private/Admin
+const debugInsertTestLog = async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const device = await Device.findById(deviceId);
+    if (!device) {
+      return res.status(404).json({ success: false, message: 'Device not found' });
+    }
+    // Only admin can use this endpoint
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    // Example metrics
+    const metrics = {
+      deviceId,
+      deviceName: device.name,
+      ipAddress: device.ipAddress,
+      timestamp: new Date(),
+      metrics: {
+        system: {
+          sysDescr: 'MikroTik RouterOS',
+          sysUpTime: 123456,
+          sysName: device.name,
+          sysLocation: 'Lab'
+        },
+        resources: {
+          cpuUsage: 42,
+          memorySize: 256144
+        },
+        storage: [],
+        temperature: {
+          boardTemperature: 45.2,
+          cpuTemperature: 47.8
+        },
+        interfaces: [
+          {
+            index: 1,
+            ifDescr: 'ether1',
+            ifOperStatus: 1,
+            ifInOctets: 12345678,
+            ifOutOctets: 87654321,
+            ifInErrors: 0,
+            ifOutErrors: 0,
+            status: 'up'
+          }
+        ]
+      },
+      summary: {
+        cpuUsage: 42,
+        memoryUsage: 67,
+        diskUsage: 80,
+        temperature: 45.2,
+        uptime: 1234,
+        status: 'ok',
+        errors: []
+      }
+    };
+    const monitoringLog = new MonitoringLog({
+      device: deviceId,
+      status: 'online',
+      responseTime: 10,
+      cpuUsage: metrics.summary.cpuUsage,
+      memoryUsage: metrics.summary.memoryUsage,
+      diskUsage: metrics.summary.diskUsage,
+      temperature: metrics.summary.temperature,
+      message: 'DEBUG: Manual test log',
+      raw: JSON.stringify(metrics)
+    });
+    await monitoringLog.save();
+    res.json({ success: true, message: 'Inserted test log', data: metrics });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -452,5 +561,6 @@ module.exports = {
   getLatestMetrics,
   getActiveCollectors,
   initializeCollectors,
-  cleanupCollectors
+  cleanupCollectors,
+  debugInsertTestLog
 };
